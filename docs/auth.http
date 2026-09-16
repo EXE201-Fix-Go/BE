@@ -1,0 +1,119 @@
+@baseUrl = http://localhost:8080/api/v1
+@email = student@example.com
+@password = Example-password-2026!
+
+### Register a customer (use a fresh email, or use login below if it already exists)
+POST {{baseUrl}}/auth/register
+Content-Type: application/json
+
+{
+  "email": "{{email}}",
+  "password": "{{password}}",
+  "fullName": "Nguyen Van An",
+  "phoneNumber": "+84901234567"
+}
+
+> {%
+    if (response.status === 201) {
+        client.global.set("accessToken", response.body.accessToken);
+        client.global.set("refreshToken", response.body.refreshToken);
+        client.global.set("customerId", response.body.user.id);
+    }
+%}
+
+### Login
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+
+{"email":"{{email}}","password":"{{password}}"}
+
+> {%
+    if (response.status === 200) {
+        client.global.set("accessToken", response.body.accessToken);
+        client.global.set("refreshToken", response.body.refreshToken);
+    }
+%}
+
+### Read own account
+GET {{baseUrl}}/users/me
+Authorization: Bearer {{accessToken}}
+
+### Update own profile
+PATCH {{baseUrl}}/users/me
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{"fullName":"Nguyen Van An","phoneNumber":null}
+
+### Refresh ONCE; this script replaces the old token pair
+POST {{baseUrl}}/auth/refresh
+Content-Type: application/json
+
+{"refreshToken":"{{refreshToken}}"}
+
+> {%
+    if (response.status === 200) {
+        client.global.set("accessToken", response.body.accessToken);
+        client.global.set("refreshToken", response.body.refreshToken);
+    }
+%}
+
+### Customer should receive 403
+GET {{baseUrl}}/partner/account
+Authorization: Bearer {{accessToken}}
+
+### Customer should receive 403
+GET {{baseUrl}}/admin/users
+Authorization: Bearer {{accessToken}}
+
+### Login admin (enter bootstrap credentials through private HTTP client variables)
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+
+{"email":"{{adminEmail}}","password":"{{adminPassword}}"}
+
+> {%
+    if (response.status === 200) {
+        client.global.set("adminAccessToken", response.body.accessToken);
+    }
+%}
+
+### Admin list
+GET {{baseUrl}}/admin/users?page=0&size=20
+Authorization: Bearer {{adminAccessToken}}
+
+### Grant partner role; the customer must log in again afterward
+PATCH {{baseUrl}}/admin/users/{{customerId}}/role
+Authorization: Bearer {{adminAccessToken}}
+Content-Type: application/json
+
+{"role":"PARTNER"}
+
+### Disable customer/partner account
+PATCH {{baseUrl}}/admin/users/{{customerId}}/status
+Authorization: Bearer {{adminAccessToken}}
+Content-Type: application/json
+
+{"status":"DISABLED"}
+
+### Enable account (does not restore old tokens)
+PATCH {{baseUrl}}/admin/users/{{customerId}}/status
+Authorization: Bearer {{adminAccessToken}}
+Content-Type: application/json
+
+{"status":"ACTIVE"}
+
+### Change password; all sessions will be revoked
+POST {{baseUrl}}/users/me/password
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{"currentPassword":"{{password}}","newPassword":"Another-example-password-2026!"}
+
+### Logout this device
+POST {{baseUrl}}/auth/logout
+Authorization: Bearer {{accessToken}}
+
+### Logout all devices
+POST {{baseUrl}}/auth/logout-all
+Authorization: Bearer {{accessToken}}
