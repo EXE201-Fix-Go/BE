@@ -41,8 +41,8 @@ fixgo:
     refresh-token-ttl: 30d
     otp-ttl: 5m
     otp-max-attempts: 5
-    otp-max-per-target-per-hour: 5
-    otp-max-per-ip-per-hour: 30
+    otp-max-per-target-per-hour: ${OTP_MAX_PER_TARGET_PER_HOUR:5}
+    otp-max-per-ip-per-hour: ${OTP_MAX_PER_IP_PER_HOUR:30}
     # Dev only: echo the OTP code in the API response because no SMS provider is chosen yet (BRD §8).
     otp-dev-echo: ${OTP_DEV_ECHO:false}
   dispatch:

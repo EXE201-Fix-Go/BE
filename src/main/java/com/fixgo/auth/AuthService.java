@@ -53,7 +53,7 @@ public class AuthService {
                 || (requestIp != null && challenges.countByRequestIpAndCreatedAtAfter(requestIp, hourAgo)
                     >= properties.otpMaxPerIpPerHour())) {
             throw new ApiException(HttpStatus.TOO_MANY_REQUESTS, "OTP_RATE_LIMITED",
-                    "Too many OTP requests. Please wait before trying again.");
+                    "Số này đã xin OTP quá nhiều lần trong 1 giờ. Vui lòng đợi hoặc dùng số khác.");
         }
         String code = String.format("%06d", random.nextInt(1_000_000));
         // The hash is salted with the challenge id so equal codes never share a hash (RB-03).
