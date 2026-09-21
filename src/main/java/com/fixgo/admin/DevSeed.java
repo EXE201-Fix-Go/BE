@@ -133,8 +133,16 @@ public class DevSeed implements ApplicationRunner {
         return order.id();
     }
 
+    /** Reuses an existing account for the phone (e.g. created by an earlier manual test) instead of failing. */
     private User user(Role role, String name, String phone) {
         var now = clock.instant();
+        var existing = identities.findByProviderAndProviderUid(IdentityProvider.PHONE, phone).orElse(null);
+        if (existing != null) {
+            var u = existing.getUser();
+            if (u.getRole() != Role.ADMIN && u.getRole() != role) u.changeRole(role);
+            if (u.getFullName() == null) u.rename(name);
+            return users.save(u);
+        }
         var u = users.save(new User(role, name, now));
         identities.save(new UserIdentity(u, IdentityProvider.PHONE, phone, true, now, now));
         return u;
@@ -144,6 +152,12 @@ public class DevSeed implements ApplicationRunner {
                                    List<String> serviceCodes, double lat, double lng) {
         var now = clock.instant();
         var u = user(Role.PARTNER, name, phone);
+        var found = profiles.findById(u.getId()).orElse(null);
+        if (found != null) {
+            found.verify(VerificationStatus.APPROVED, null, now);
+            found.updatePresence(Availability.ONLINE, lat, lng, now);
+            return profiles.save(found);
+        }
         var p = new PartnerProfile(u.getId(), type, parentShopId, shopName);
         p.verify(VerificationStatus.APPROVED, null, now);
         p.updatePresence(Availability.ONLINE, lat, lng, now);
