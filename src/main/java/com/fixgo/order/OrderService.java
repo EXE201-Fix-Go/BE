@@ -207,17 +207,26 @@ public class OrderService {
 
     @Transactional(readOnly = true)
     public OrderDtos.OrderResponse get(Actor actor, UUID orderId) {
+        return toResponse(visibleOrder(actor, orderId));
+    }
+
+    /** Lightweight poll target: status only (3 queries instead of ~15), so mobile clients can poll cheaply. */
+    @Transactional(readOnly = true)
+    public OrderDtos.OrderStatusResponse getStatus(Actor actor, UUID orderId) {
+        var order = visibleOrder(actor, orderId);
+        return new OrderDtos.OrderStatusResponse(order.getId(), order.getOrderCode(), order.getStatus(), order.getVersion());
+    }
+
+    private RescueOrder visibleOrder(Actor actor, UUID orderId) {
         var order = orders.findById(orderId).orElseThrow(OrderService::notFound);
         boolean visible = switch (actor.role()) {
             case CUSTOMER -> order.getCustomerId().equals(actor.userId());
-            case PARTNER -> assignments.findByOrderIdAndStatus(orderId, OrderAssignment.Status.ACCEPTED).stream()
-                    .anyMatch(a -> a.getPartnerId().equals(actor.userId()))
-                    || assignments.findByOrderIdAndStatus(orderId, OrderAssignment.Status.ENDED).stream()
-                    .anyMatch(a -> a.getPartnerId().equals(actor.userId()));
+            case PARTNER -> assignments.existsByOrderIdAndPartnerIdAndStatusIn(orderId, actor.userId(),
+                    List.of(OrderAssignment.Status.ACCEPTED, OrderAssignment.Status.ENDED));
             case ADMIN -> true;
         };
         if (!visible) throw notFound();
-        return toResponse(order);
+        return order;
     }
 
     @Transactional(readOnly = true)
@@ -277,7 +286,8 @@ public class OrderService {
                 service == null ? null : service.getCode(), service == null ? null : service.getName(),
                 o.getExtraServiceIds().stream().map(id -> extras.get(id)).filter(s -> s != null)
                         .map(ServiceCatalog::getCode).toList(),
-                o.getPickupAddressText(), o.getPickupNote(), List.copyOf(o.getPhotoUrls()), o.getPickupLat(),
+                o.getPickupAddressText(), o.getPickupNote(), List.copyOf(o.getPhotoUrls()),
+                o.getContactName(), o.getContactPhone(), o.getPickupLat(),
                 o.getPickupLng(), o.getCallOutFeeSnapshot(), o.getCreatedAt(), o.getConfirmedAt(), o.getCompletedAt(),
                 partner, quote, payment, o.getCancellationSource(), o.getCancellationReason(), o.getCancelledAt(),
                 entries);

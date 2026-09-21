@@ -80,10 +80,14 @@ abstract class OrderFlowContract {
         postJson("/api/v1/partner/offers/" + rivalOffers.get(0).path("assignmentId").asText() + "/accept", rival.token, null)
                 .andExpect(status().isConflict());
 
-        // Customer now sees the partner on the tracking screen.
+        // Customer now sees the partner on the tracking screen; the cheap status endpoint agrees.
         o = read(mvc.perform(get("/api/v1/orders/" + orderId).header("Authorization", "Bearer " + customer.token))
                 .andExpect(status().isOk()).andReturn());
         assertThat(o.path("status").asText()).isEqualTo("ASSIGNED");
+        mvc.perform(get("/api/v1/orders/" + orderId + "/status").header("Authorization", "Bearer " + partner.token))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("ASSIGNED"));
+        mvc.perform(get("/api/v1/orders/" + orderId + "/status").header("Authorization", "Bearer " + rival.token))
+                .andExpect(status().isNotFound());                                     // never accepted → invisible
         assertThat(o.path("partner").path("id").asText()).isEqualTo(partner.userId);
 
         // Arrive → check → quote (GW-01 → GW-02).

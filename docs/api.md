@@ -31,7 +31,8 @@ Số điện thoại lần đầu → tài khoản `CUSTOMER`. OTP: 6 số, 5 ph
 | `GET /services` | bảng giá (public) |
 | `POST /orders` | `{serviceId, extraServiceIds?, addressText, note?, photoUrls?, lat, lng, vehicleDescription?, contactName?, contactPhone?}` → `PENDING_CONFIRMATION`, `callOutFee` snapshot |
 | `POST /orders/{id}/confirm` | xác nhận phí gọi thợ → `REQUESTED` + broadcast vòng 1 (BR01) |
-| `GET /orders`, `GET /orders/{id}` | poll trạng thái; có `partner`, `quote` (revision mới nhất), `payment`, `history` |
+| `GET /orders`, `GET /orders/{id}` | đơn đầy đủ: `partner`, `quote` (revision mới nhất), `payment`, `history`, `contactName/contactPhone` |
+| `GET /orders/{id}/status` | **poll rẻ** `{id, orderCode, status, version}` — FE poll cái này, chỉ tải đơn đầy đủ khi status đổi |
 | `POST /orders/{id}/cancel {"reason"}` | BR09; hủy sau khi thợ đã tới → phát sinh `payment` phí gọi thợ (30k, `quote_id` NULL) |
 | `POST /orders/{id}/quotes/{qid}/approve` · `/decline {"reason"?}` | chỉ khách của đơn (RB-45); approve → `APPROVED` → `IN_PROGRESS` |
 | `POST /orders/{id}/payment/confirm` | "Đã thanh toán" (tiền mặt, thợ giữ tiền — RB-59) |
@@ -53,6 +54,9 @@ Vòng điều phối (`dispatch_policies`, BR08): 2 km/60 s → 4 km/75 s → 7 
 ## Trạng thái đơn (ERD §7.1 — 14 giá trị)
 `PENDING_CONFIRMATION → REQUESTED → ASSIGNED → ARRIVED → CHECKING → WAITING_FOR_APPROVAL → APPROVED → IN_PROGRESS → COMPLETED`
 + `ADDITIONAL_QUOTE`, `PAUSED`, `CANCELLED`, `NO_PARTNER_FOUND`, `EXPIRED`. Chuyển trạng thái sai → 409 `INVALID_STATUS_TRANSITION`.
+
+## Dữ liệu test (dev)
+Chạy với `DEV_SEED=true` (run-dev.ps1 bật sẵn): khách `0901000001`, thợ đã duyệt & online `0902000001`, `0902000002`, chủ tiệm `0903000001` (+ nhân viên `0903000002`), kèm 3 đơn mẫu (hoàn tất / hủy sau khi thợ tới / không tìm được thợ). Mã OTP lấy từ `devCode` khi `OTP_DEV_ECHO=true`.
 
 ## Lỗi
 `{timestamp, status, code, message, path, fieldErrors}`. Mã hay gặp: `INVALID_OTP`, `OTP_RATE_LIMITED`, `INVALID_REFRESH_TOKEN`,

@@ -28,6 +28,11 @@ public class OrderController {
     @GetMapping("/{id}")
     public OrderDtos.OrderResponse get(Authentication auth, @PathVariable UUID id) { return orders.get(Actor.of(auth), id); }
 
+    @GetMapping("/{id}/status")
+    public OrderDtos.OrderStatusResponse status(Authentication auth, @PathVariable UUID id) {
+        return orders.getStatus(Actor.of(auth), id);
+    }
+
     @PostMapping("/{id}/confirm")
     public OrderDtos.OrderResponse confirm(Authentication auth, @PathVariable UUID id) { return orders.confirm(Actor.of(auth), id); }
 

@@ -4,6 +4,7 @@ import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -21,4 +22,7 @@ public interface OrderAssignmentRepository extends JpaRepository<OrderAssignment
     Optional<OrderAssignment> findFirstByOrderIdAndStatusOrderByAcceptedAtDesc(UUID orderId, OrderAssignment.Status status);
 
     List<OrderAssignment> findByPartnerIdAndStatusOrderByOfferedAtDesc(UUID partnerId, OrderAssignment.Status status);
+
+    /** One round trip: was this partner ever responsible for the order (accepted now or ended)? */
+    boolean existsByOrderIdAndPartnerIdAndStatusIn(UUID orderId, UUID partnerId, Collection<OrderAssignment.Status> statuses);
 }

@@ -131,6 +131,7 @@ public class RescueOrder {
     public ActorType getCancellationSource() { return cancellationSource; }
     public String getCancellationReason() { return cancellationReason; }
     public Instant getCancelledAt() { return cancelledAt; }
+    public long getVersion() { return version; }
     public Set<UUID> getExtraServiceIds() { return extraServiceIds; }
     public List<String> getPhotoUrls() { return photoUrls; }
 }

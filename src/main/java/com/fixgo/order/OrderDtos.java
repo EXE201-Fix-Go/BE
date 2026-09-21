@@ -30,11 +30,15 @@ public final class OrderDtos {
 
     public record PaymentSummary(UUID id, BigDecimal amount, String status, String method, Instant confirmedAt) { }
 
+    /** GET /orders/{id}/status — cheap polling payload. */
+    public record OrderStatusResponse(UUID id, String orderCode, OrderStatus status, long version) { }
+
     public record HistoryEntry(OrderStatus from, OrderStatus to, ActorType actorType, String note, Instant at) { }
 
     /** GET /orders/{id} — superset of the FE Order type. */
     public record OrderResponse(UUID id, String orderCode, OrderStatus status, String serviceId, String serviceName,
                                 List<String> extraServiceIds, String addressText, String note, List<String> photoUrls,
+                                String contactName, String contactPhone,
                                 Double lat, Double lng, BigDecimal callOutFee, Instant createdAt, Instant confirmedAt,
                                 Instant completedAt, PartnerSummary partner, QuoteDtos.QuoteResponse quote,
                                 PaymentSummary payment, ActorType cancellationSource, String cancellationReason,

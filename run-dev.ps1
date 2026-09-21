@@ -42,6 +42,7 @@ $env:DB_PASSWORD = $DB_PASSWORD
 $env:DB_SCHEMA = if ($DB_SCHEMA) { $DB_SCHEMA } else { "fixgo_v2" }
 $env:JWT_SECRET = (Get-Content $secretFile -Raw).Trim()
 $env:OTP_DEV_ECHO = "true"            # dev: API tra ma OTP trong response (chua co SMS)
+$env:DEV_SEED = "true"                # dev: tao tai khoan + don mau (chi chay 1 lan)
 $env:BOOTSTRAP_ADMIN_PHONE = $ADMIN_PHONE
 
 Write-Host "Dang chay backend... (Ctrl+C de dung). Sau khi thay 'Started FixGoApplication', mo docs\order-flow.http de test." -ForegroundColor Green
