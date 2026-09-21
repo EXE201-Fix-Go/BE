@@ -297,6 +297,37 @@ abstract class OrderFlowContract {
                 .andExpect(status().isForbidden()).andExpect(jsonPath("$.code").value("PARTNER_NOT_VERIFIED"));   // BR06
     }
 
+    // ------------------------------------------------------------------ uploads & dashboard
+
+    @Test
+    void scenePhotosUploadAndReachThePartner() throws Exception {
+        var loc = nextLocation();
+        var customer = loginNew();
+        var partner = approvedOnlinePartner(loc, "tire-patch");
+        var png = new byte[] {(byte) 0x89, 'P', 'N', 'G', 13, 10, 26, 10, 0, 0, 0, 0};
+        var uploaded = read(mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                        .multipart("/api/v1/uploads")
+                        .file(new org.springframework.mock.web.MockMultipartFile("file", "scene.png", "image/png", png))
+                        .header("Authorization", "Bearer " + customer.token))
+                .andExpect(status().isCreated()).andReturn());
+        String url = uploaded.path("url").asText();
+        assertThat(url).contains("/uploads/").endsWith(".png");
+        mvc.perform(get(url.substring(url.indexOf("/uploads/")))).andExpect(status().isOk());   // served publicly
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart("/api/v1/uploads")
+                        .file(new org.springframework.mock.web.MockMultipartFile("file", "x.txt", "text/plain", "hi".getBytes())))
+                .andExpect(status().isUnauthorized());                                       // anonymous cannot upload
+
+        var created = read(postJson("/api/v1/orders", customer.token, Map.of("serviceId", "tire-patch",
+                "addressText", "x", "lat", loc[0], "lng", loc[1], "photoUrls", List.of(url))).andReturn());
+        postJson("/api/v1/orders/" + created.path("id").asText() + "/confirm", customer.token, null).andExpect(status().isOk());
+        var dash = read(mvc.perform(get("/api/v1/partner/dashboard").header("Authorization", "Bearer " + partner.token))
+                .andExpect(status().isOk()).andReturn());
+        assertThat(dash.path("profile").path("availability").asText()).isEqualTo("ONLINE");
+        assertThat(dash.path("offers")).hasSize(1);
+        assertThat(dash.path("offers").get(0).path("photoUrls").get(0).asText()).isEqualTo(url);
+        assertThat(dash.path("stats").path("completedToday").asLong()).isZero();
+    }
+
     // ------------------------------------------------------------------ auth
 
     @Test

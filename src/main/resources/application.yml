@@ -27,6 +27,10 @@ spring:
   jackson:
     deserialization:
       fail-on-unknown-properties: true
+  servlet:
+    multipart:
+      max-file-size: 10MB
+      max-request-size: 12MB
 server:
   port: ${PORT:8080}
   error:
@@ -49,6 +53,10 @@ fixgo:
     pending-confirmation-ttl: 10m
     scheduler-enabled: ${DISPATCH_SCHEDULER:true}
     scheduler-interval-ms: 5000
+  uploads:
+    # Pilot: local disk (git-ignored). Production: Cloudinary (BRD §8).
+    dir: ${UPLOADS_DIR:.local/uploads}
+    public-base-url: ${PUBLIC_BASE_URL:http://localhost:8080}
   cors:
     allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:*,http://127.0.0.1:*,https://exe201-fix-go.github.io}
   # Dev only: sample accounts + orders (see admin/DevSeed).

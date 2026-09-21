@@ -42,6 +42,10 @@ public final class PartnerDtos {
     public record StatsResponse(long completedToday, java.math.BigDecimal earnedToday, long completedTotal,
                                 Double averageRating, long reviewCount, long activeJobs) { }
 
+    /** GET /partner/dashboard — everything the partner home screen polls, in ONE round trip. */
+    public record DashboardResponse(ProfileResponse profile, List<com.fixgo.dispatch.DispatchDtos.OfferResponse> offers,
+                                    List<com.fixgo.dispatch.DispatchDtos.OfferResponse> jobs, StatsResponse stats) { }
+
     public record StaffResponse(UUID userId, String fullName, String phone, VerificationStatus verificationStatus,
                                 Availability availability) { }
 }

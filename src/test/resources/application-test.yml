@@ -16,6 +16,8 @@ spring:
     default-schema: fixgo_test
     clean-disabled: false
 fixgo:
+  uploads:
+    dir: target/test-uploads
   auth:
     jwt-secret: Zml4Z28tdGVzdC1vbmx5LWtleS0zMi1ieXRlcy1taW5pbXVtLWxvbmc=
     otp-dev-echo: true

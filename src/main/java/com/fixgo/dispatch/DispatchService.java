@@ -206,7 +206,8 @@ public class DispatchService {
         return new DispatchDtos.OfferResponse(a.getId(), o.getId(), o.getOrderCode(), o.getStatus(),
                 service == null ? null : service.getCode(), service == null ? null : service.getName(),
                 o.getPickupAddressText(), o.getPickupNote(), o.getPickupLat(), o.getPickupLng(),
-                o.getCallOutFeeSnapshot(), o.getContactName(), a.getOfferedAt(), a.getExpiresAt(), roundNo);
+                o.getCallOutFeeSnapshot(), o.getContactName(), a.getOfferedAt(), a.getExpiresAt(), roundNo,
+                List.copyOf(o.getPhotoUrls()));
     }
 
     private static ApiException offerNotFound() {

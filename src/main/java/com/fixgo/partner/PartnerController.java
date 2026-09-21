@@ -14,10 +14,21 @@ import java.util.List;
 public class PartnerController {
     private final PartnerProfileService service;
     private final PartnerStatsService stats;
+    private final com.fixgo.dispatch.DispatchService dispatch;
 
-    public PartnerController(PartnerProfileService service, PartnerStatsService stats) {
+    public PartnerController(PartnerProfileService service, PartnerStatsService stats,
+                             com.fixgo.dispatch.DispatchService dispatch) {
         this.service = service;
         this.stats = stats;
+        this.dispatch = dispatch;
+    }
+
+    @GetMapping("/dashboard")
+    @org.springframework.transaction.annotation.Transactional(readOnly = true)
+    public PartnerDtos.DashboardResponse dashboard(Authentication auth) {
+        var actor = Actor.of(auth);
+        return new PartnerDtos.DashboardResponse(service.me(actor), dispatch.listOffers(actor),
+                dispatch.listActiveJobs(actor), stats.stats(actor));
     }
 
     @GetMapping("/me")
