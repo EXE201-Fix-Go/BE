@@ -1,12 +1,29 @@
+# Test profile: real PostgreSQL + PostGIS (Testcontainers, or an external DB via TEST_DB_*), private schema fixgo_test.
 spring:
   datasource:
-    url: jdbc:h2:mem:fixgo-test;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH;DB_CLOSE_DELAY=-1;LOCK_TIMEOUT=10000
-    username: sa
-    password: ""
-    driver-class-name: org.h2.Driver
+    url: ${TEST_DB_URL:jdbc:postgresql://localhost:5432/postgres}
+    username: ${TEST_DB_USERNAME:postgres}
+    password: ${TEST_DB_PASSWORD:postgres}
+    hikari:
+      maximum-pool-size: 4
+      connection-init-sql: SET search_path TO fixgo_test, extensions, public
+  jpa:
+    properties:
+      hibernate:
+        default_schema: fixgo_test
+  flyway:
+    schemas: fixgo_test
+    default-schema: fixgo_test
+    clean-disabled: false
 fixgo:
   auth:
     jwt-secret: Zml4Z28tdGVzdC1vbmx5LWtleS0zMi1ieXRlcy1taW5pbXVtLWxvbmc=
+    otp-dev-echo: true
+    otp-max-per-target-per-hour: 50
+    otp-max-per-ip-per-hour: 1000
+  dispatch:
+    scheduler-enabled: false
+    pending-confirmation-ttl: 10m
   bootstrap-admin:
-    email: ""
-    password: ""
+    phone: "+84900000009"
+    full-name: Test Admin

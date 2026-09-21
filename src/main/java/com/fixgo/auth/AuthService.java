@@ -1,122 +1,141 @@
 package com.fixgo.auth;
 
 import com.fixgo.common.ApiException;
+import com.fixgo.common.PhoneNumbers;
 import com.fixgo.user.*;
 import org.springframework.http.HttpStatus;
-import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import java.security.MessageDigest;
+import java.security.SecureRandom;
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
+import java.time.Duration;
 import java.util.UUID;
 
+/** OTP + self-managed JWT (QD-12). No passwords anywhere (C-06). */
 @Service
 public class AuthService {
+    private final OtpChallengeRepository challenges;
     private final UserRepository users;
-    private final AuthSessionRepository sessions;
+    private final UserIdentityRepository identities;
+    private final UserDeviceRepository devices;
     private final RefreshTokenRepository refreshTokens;
-    private final PasswordEncoder passwords;
+    private final UserService userService;
     private final TokenService tokens;
+    private final OtpSender sender;
     private final AuthProperties properties;
     private final Clock clock;
-    private final String dummyPasswordHash;
+    private final SecureRandom random = new SecureRandom();
 
-    public AuthService(UserRepository users, AuthSessionRepository sessions, RefreshTokenRepository refreshTokens,
-                       PasswordEncoder passwords, TokenService tokens, AuthProperties properties, Clock clock) {
+    public AuthService(OtpChallengeRepository challenges, UserRepository users, UserIdentityRepository identities,
+                       UserDeviceRepository devices, RefreshTokenRepository refreshTokens, UserService userService,
+                       TokenService tokens, OtpSender sender, AuthProperties properties, Clock clock) {
+        this.challenges = challenges;
         this.users = users;
-        this.sessions = sessions;
+        this.identities = identities;
+        this.devices = devices;
         this.refreshTokens = refreshTokens;
-        this.passwords = passwords;
+        this.userService = userService;
         this.tokens = tokens;
+        this.sender = sender;
         this.properties = properties;
         this.clock = clock;
-        dummyPasswordHash = passwords.encode(UUID.randomUUID().toString());
     }
 
+    /** RB-04: rate-limited per target and per IP. */
     @Transactional
-    public AuthDtos.TokenResponse register(AuthDtos.RegisterRequest request) {
-        if (users.existsByEmail(request.email())) {
-            throw new ApiException(HttpStatus.CONFLICT, "EMAIL_ALREADY_EXISTS", "Email is already registered.");
-        }
-        var user = users.saveAndFlush(new User(request.email(), passwords.encode(request.password()),
-                request.fullName(), request.phoneNumber(), Role.CUSTOMER, clock.instant()));
-        return startSession(user);
-    }
-
-    @Transactional(noRollbackFor = ApiException.class)
-    public AuthDtos.TokenResponse login(AuthDtos.LoginRequest request) {
-        var user = users.lockByEmail(request.email()).orElse(null);
-        boolean validPassword = matches(request.password(), user == null ? dummyPasswordHash : user.getPasswordHash());
+    public AuthDtos.OtpRequestResult requestOtp(String rawPhone, String requestIp) {
+        String phone = PhoneNumbers.toE164(rawPhone);
         var now = clock.instant();
-        if (user == null || !user.canLogin(now)) throw invalidCredentials();
-        if (!validPassword) {
-            user.recordLoginFailure(now, properties.maxLoginFailures(), properties.loginLockDuration());
-            throw invalidCredentials();
+        var hourAgo = now.minus(Duration.ofHours(1));
+        if (challenges.countByTargetAndCreatedAtAfter(phone, hourAgo) >= properties.otpMaxPerTargetPerHour()
+                || (requestIp != null && challenges.countByRequestIpAndCreatedAtAfter(requestIp, hourAgo)
+                    >= properties.otpMaxPerIpPerHour())) {
+            throw new ApiException(HttpStatus.TOO_MANY_REQUESTS, "OTP_RATE_LIMITED",
+                    "Too many OTP requests. Please wait before trying again.");
         }
-        user.resetLoginFailures(now);
-        return startSession(user);
+        String code = String.format("%06d", random.nextInt(1_000_000));
+        // The hash is salted with the challenge id so equal codes never share a hash (RB-03).
+        UUID id = UUID.randomUUID();
+        var challenge = challenges.save(new OtpChallenge(id, phone, OtpPurpose.LOGIN, hashOf(id, code),
+                properties.otpMaxAttempts(), now, now.plus(properties.otpTtl()), requestIp));
+        sender.send(phone, code);
+        return new AuthDtos.OtpRequestResult(challenge.getId(), properties.otpTtl().toSeconds(),
+                properties.otpDevEcho() ? code : null);
     }
 
+    /** RB-03: consumed inside the same transaction as the check; RB-05: tokens bound to a device. */
+    @Transactional(noRollbackFor = ApiException.class)
+    public AuthDtos.TokenResponse verifyOtp(AuthDtos.OtpVerifyRequest request) {
+        var now = clock.instant();
+        var challenge = challenges.lockById(request.otpId()).orElseThrow(AuthService::invalidOtp);
+        if (!challenge.isOpen(now)) throw invalidOtp();
+        if (!MessageDigest.isEqual(hashOf(challenge.getId(), request.code()).getBytes(StandardCharsets.UTF_8),
+                challenge.getCodeHash().getBytes(StandardCharsets.UTF_8))) {
+            challenge.recordFailure();
+            throw invalidOtp();
+        }
+        challenge.consume(now);
+
+        var identity = identities.findByProviderAndProviderUid(IdentityProvider.PHONE, challenge.getTarget())
+                .orElseGet(() -> {
+                    var user = users.save(new User(Role.CUSTOMER, null, now));
+                    return identities.save(new UserIdentity(user, IdentityProvider.PHONE, challenge.getTarget(),
+                            true, now, now));
+                });
+        identity.markVerified(now);
+        var user = identity.getUser();
+        if (!user.isActive()) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "ACCOUNT_LOCKED", "This account is locked.");
+        }
+        user.recordLogin(now);
+        String fingerprint = request.deviceFingerprint() == null || request.deviceFingerprint().isBlank()
+                ? "anon-" + UUID.randomUUID() : request.deviceFingerprint().strip();
+        var device = devices.save(new UserDevice(user, fingerprint,
+                request.platform() == null ? DevicePlatform.WEB : request.platform(), now));
+        return tokens.issue(device, userService.toResponse(user)).response();
+    }
+
+    /** Reuse of an already-rotated token revokes the whole device chain. */
     @Transactional(noRollbackFor = ApiException.class)
     public AuthDtos.TokenResponse refresh(String rawToken) {
-        String hash = TokenService.hash(rawToken);
-        UUID sessionId = refreshTokens.findSessionIdByTokenHash(hash).orElseThrow(this::invalidRefresh);
-        UUID userId = sessions.findUserIdById(sessionId).orElseThrow(this::invalidRefresh);
-        // Every session mutation locks the account first, then the session, to serialize rotation/revocation.
-        var user = users.lockById(userId).orElseThrow(this::invalidRefresh);
-        var session = sessions.lockById(sessionId).orElseThrow(this::invalidRefresh);
-        var token = refreshTokens.findByTokenHash(hash).orElseThrow(this::invalidRefresh);
         var now = clock.instant();
-        if (!session.isActive(now) || user.getStatus() != AccountStatus.ACTIVE) throw invalidRefresh();
+        var token = refreshTokens.lockByTokenHash(TokenService.hash(rawToken)).orElseThrow(AuthService::invalidRefresh);
+        var device = devices.lockById(token.getDevice().getId()).orElseThrow(AuthService::invalidRefresh);
         if (token.isUsed()) {
-            session.revoke(now);
+            device.revoke(now, null);
             throw invalidRefresh();
         }
-        token.markUsed(now);
-        return tokens.issue(session);
+        var user = users.lockById(device.getUser().getId()).orElseThrow(AuthService::invalidRefresh);
+        if (!token.isLive(now) || !device.isActive() || !user.isActive()) throw invalidRefresh();
+        device.touch(now);
+        var issued = tokens.issue(device, userService.toResponse(user));
+        token.rotateTo(issued.row(), now);
+        return issued.response();
     }
 
     @Transactional
-    public void logout(UUID userId, UUID sessionId) {
-        users.lockById(userId).orElseThrow(this::invalidRefresh);
-        var session = sessions.lockById(sessionId).orElseThrow(this::invalidRefresh);
-        if (!session.getUser().getId().equals(userId)) throw invalidRefresh();
-        session.revoke(clock.instant());
+    public void logout(UUID userId, UUID deviceId) {
+        var device = devices.lockById(deviceId).orElseThrow(AuthService::invalidRefresh);
+        if (!device.getUser().getId().equals(userId)) throw invalidRefresh();
+        device.revoke(clock.instant(), userId);
     }
 
     @Transactional
     public void logoutAll(UUID userId) {
-        users.lockById(userId).orElseThrow(this::invalidRefresh);
-        sessions.revokeAllForUser(userId, clock.instant());
+        devices.revokeAllForUser(userId, clock.instant(), userId);
     }
 
-    @Transactional(noRollbackFor = ApiException.class)
-    public void changePassword(UUID userId, AuthDtos.ChangePasswordRequest request) {
-        var user = users.lockById(userId).orElseThrow(this::invalidCredentials);
-        if (!user.canLogin(clock.instant())) throw invalidCredentials();
-        if (!matches(request.currentPassword(), user.getPasswordHash())) {
-            user.recordLoginFailure(clock.instant(), properties.maxLoginFailures(), properties.loginLockDuration());
-            throw invalidCredentials();
-        }
-        user.changePassword(passwords.encode(request.newPassword()), clock.instant());
-        sessions.revokeAllForUser(userId, clock.instant());
+    static String hashOf(UUID otpId, String code) {
+        return TokenService.hash(otpId + ":" + code);
     }
 
-    private boolean matches(String password, String hash) {
-        return password.getBytes(StandardCharsets.UTF_8).length <= 72 && passwords.matches(password, hash);
+    private static ApiException invalidOtp() {
+        return new ApiException(HttpStatus.UNAUTHORIZED, "INVALID_OTP", "The code is invalid or has expired.");
     }
 
-    private AuthDtos.TokenResponse startSession(User user) {
-        var now = clock.instant();
-        var session = sessions.save(new AuthSession(user, now, now.plus(properties.refreshTokenTtl())));
-        return tokens.issue(session);
-    }
-
-    private ApiException invalidCredentials() {
-        return new ApiException(HttpStatus.UNAUTHORIZED, "INVALID_CREDENTIALS", "Unable to sign in with these credentials.");
-    }
-
-    private ApiException invalidRefresh() {
+    private static ApiException invalidRefresh() {
         return new ApiException(HttpStatus.UNAUTHORIZED, "INVALID_REFRESH_TOKEN", "Refresh token is invalid or expired.");
     }
 }

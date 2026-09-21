@@ -1,24 +1,6 @@
+# Profile "supabase": same datasource contract as the base file; kept so existing run
+# configurations (--spring.profiles.active=supabase) keep working. All values come from env vars.
 spring:
   datasource:
-    url: ${DB_URL}
-    username: ${DB_USERNAME}
-    password: ${DB_PASSWORD}
-    driver-class-name: org.postgresql.Driver
     hikari:
-      maximum-pool-size: 5
-      minimum-idle: 1
-      connection-timeout: 30000
-      schema: fixgo
-  jpa:
-    properties:
-      hibernate:
-        default_schema: fixgo
-  flyway:
-    schemas: fixgo
-    default-schema: fixgo
-    baseline-on-migrate: false
-    baseline-version: "1"
-
-fixgo:
-  auth:
-    jwt-secret: ${JWT_SECRET}
+      maximum-pool-size: ${DB_POOL_SIZE:5}

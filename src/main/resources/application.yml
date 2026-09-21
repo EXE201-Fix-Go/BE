@@ -5,12 +5,25 @@ spring:
     url: ${DB_URL}
     username: ${DB_USERNAME}
     password: ${DB_PASSWORD}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      maximum-pool-size: ${DB_POOL_SIZE:5}
+      minimum-idle: 1
+      connection-timeout: 30000
+      # PostGIS on Supabase lives in the "extensions" schema; keep it on the search path.
+      connection-init-sql: SET search_path TO ${DB_SCHEMA:fixgo}, extensions, public
   jpa:
     open-in-view: false
     hibernate:
       ddl-auto: validate
+    properties:
+      hibernate:
+        default_schema: ${DB_SCHEMA:fixgo}
   flyway:
     enabled: true
+    schemas: ${DB_SCHEMA:fixgo}
+    default-schema: ${DB_SCHEMA:fixgo}
+    baseline-on-migrate: false
   jackson:
     deserialization:
       fail-on-unknown-properties: true
@@ -25,12 +38,19 @@ fixgo:
     audience: fixgo-api
     jwt-secret: ${JWT_SECRET}
     access-token-ttl: 15m
-    refresh-token-ttl: 7d
-    max-login-failures: 5
-    login-lock-duration: 15m
+    refresh-token-ttl: 30d
+    otp-ttl: 5m
+    otp-max-attempts: 5
+    otp-max-per-target-per-hour: 5
+    otp-max-per-ip-per-hour: 30
+    # Dev only: echo the OTP code in the API response because no SMS provider is chosen yet (BRD §8).
+    otp-dev-echo: ${OTP_DEV_ECHO:false}
+  dispatch:
+    pending-confirmation-ttl: 10m
+    scheduler-enabled: ${DISPATCH_SCHEDULER:true}
+    scheduler-interval-ms: 5000
   cors:
-    allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:3000,http://localhost:5173}
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:3000,http://localhost:5173,http://localhost:3001,https://exe201-fix-go.github.io}
   bootstrap-admin:
-    email: ${BOOTSTRAP_ADMIN_EMAIL:}
-    password: ${BOOTSTRAP_ADMIN_PASSWORD:}
+    phone: ${BOOTSTRAP_ADMIN_PHONE:}
     full-name: ${BOOTSTRAP_ADMIN_NAME:FixGo Admin}

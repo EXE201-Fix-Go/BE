@@ -31,30 +31,35 @@ public class TokenService {
         this.clock = clock;
     }
 
-    public AuthDtos.TokenResponse issue(AuthSession session) {
+    /** Issues an access token plus a fresh refresh token bound to the device; returns both and the new row. */
+    public Issued issue(UserDevice device, UserResponse user) {
         var now = clock.instant();
         var expiresAt = now.plus(properties.accessTokenTtl());
-        if (expiresAt.isAfter(session.getExpiresAt())) expiresAt = session.getExpiresAt();
-        var user = session.getUser();
         var claims = JwtClaimsSet.builder()
                 .issuer(properties.issuer()).audience(List.of(properties.audience()))
-                .subject(user.getId().toString()).issuedAt(now).expiresAt(expiresAt)
-                .id(UUID.randomUUID().toString()).claim("sid", session.getId().toString())
-                .claim("role", user.getRole().name()).claim("token_use", "access").build();
+                .subject(user.id().toString()).issuedAt(now).expiresAt(expiresAt)
+                .id(UUID.randomUUID().toString())
+                .claim("did", device.getId().toString())
+                .claim("role", user.role().name())
+                .claim("token_use", "access").build();
         String access = encoder.encode(JwtEncoderParameters.from(
                 JwsHeader.with(MacAlgorithm.HS256).build(), claims)).getTokenValue();
         byte[] bytes = new byte[32];
         random.nextBytes(bytes);
         String refresh = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
-        refreshTokens.save(new RefreshToken(session, hash(refresh), now));
-        return new AuthDtos.TokenResponse(access, refresh, "Bearer", Duration.between(now, expiresAt).toSeconds(),
-                session.getExpiresAt(), UserResponse.from(user));
+        var refreshExpiresAt = now.plus(properties.refreshTokenTtl());
+        var row = refreshTokens.save(new RefreshToken(device, hash(refresh), now, refreshExpiresAt));
+        var response = new AuthDtos.TokenResponse(access, refresh, "Bearer",
+                Duration.between(now, expiresAt).toSeconds(), refreshExpiresAt, user.appRole(), user);
+        return new Issued(response, row);
     }
 
-    public static String hash(String token) {
+    public record Issued(AuthDtos.TokenResponse response, RefreshToken row) { }
+
+    public static String hash(String value) {
         try {
             return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
-                    .digest(token.getBytes(StandardCharsets.UTF_8)));
+                    .digest(value.getBytes(StandardCharsets.UTF_8)));
         } catch (NoSuchAlgorithmException ex) {
             throw new IllegalStateException("SHA-256 is unavailable.", ex);
         }

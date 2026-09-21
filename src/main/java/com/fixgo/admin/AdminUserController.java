@@ -1,41 +1,53 @@
 package com.fixgo.admin;
 
-import com.fixgo.user.*;
+import com.fixgo.common.Actor;
+import com.fixgo.partner.PartnerDtos;
+import com.fixgo.partner.PartnerProfileService;
+import com.fixgo.user.AccountStatus;
+import com.fixgo.user.UserResponse;
 import jakarta.validation.Valid;
-import jakarta.validation.constraints.*;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.NotNull;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.Authentication;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 import java.util.UUID;
 
-@Validated
 @RestController
-@RequestMapping("/api/v1/admin/users")
+@RequestMapping("/api/v1/admin")
 @PreAuthorize("hasRole('ADMIN')")
+@Validated
 public class AdminUserController {
     private final AdminUserService users;
+    private final PartnerProfileService partners;
 
-    public AdminUserController(AdminUserService users) { this.users = users; }
+    public AdminUserController(AdminUserService users, PartnerProfileService partners) {
+        this.users = users;
+        this.partners = partners;
+    }
 
-    @GetMapping
+    @GetMapping("/users")
     public AdminUserService.UserPage list(@RequestParam(defaultValue = "0") @Min(0) int page,
-                                         @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size) {
+                                          @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size) {
         return users.list(page, size);
     }
 
-    @GetMapping("/{id}")
+    @GetMapping("/users/{id}")
     public UserResponse get(@PathVariable UUID id) { return users.get(id); }
 
-    @PatchMapping("/{id}/role")
-    public UserResponse role(@PathVariable UUID id, @Valid @RequestBody ChangeRoleRequest request) {
-        return users.changeRole(id, request.role());
+    @PatchMapping("/users/{id}/status")
+    public UserResponse status(Authentication auth, @PathVariable UUID id, @Valid @RequestBody StatusRequest request) {
+        return users.changeStatus(Actor.of(auth).userId(), id, request.status());
     }
 
-    @PatchMapping("/{id}/status")
-    public UserResponse status(@PathVariable UUID id, @Valid @RequestBody ChangeStatusRequest request) {
-        return users.changeStatus(id, request.status());
+    /** BR06: partners only start receiving broadcasts after an admin approves their KYC. */
+    @PostMapping("/partners/{id}/verify")
+    public PartnerDtos.ProfileResponse verify(Authentication auth, @PathVariable UUID id,
+                                              @Valid @RequestBody PartnerDtos.VerifyRequest request) {
+        return partners.verify(Actor.of(auth), id, request.status());
     }
 
-    public record ChangeRoleRequest(@NotNull Role role) { }
-    public record ChangeStatusRequest(@NotNull AccountStatus status) { }
+    public record StatusRequest(@NotNull AccountStatus status) { }
 }

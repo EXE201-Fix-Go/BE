@@ -1,6 +1,6 @@
 # Kết nối Fix&Go Backend với Supabase
 
-Backend hiện có PostgreSQL JDBC, JPA và Flyway. Không cần cài Supabase SDK, không dùng API key thay mật khẩu database và không thay cơ chế đăng nhập Spring Security bằng Supabase Auth.
+Backend dùng PostgreSQL JDBC, JPA, Flyway và **PostGIS**. Không cần Supabase SDK, không dùng API key/secret key của Supabase, không dùng Supabase Auth: xác thực là OTP + JWT tự quản (QD-12). Bật extension **PostGIS** trong Dashboard → Database → Extensions trước khi chạy (migration V1 cũng tự `CREATE EXTENSION IF NOT EXISTS`).
 
 ## 1. Chuẩn bị database
 
@@ -73,6 +73,8 @@ Xóa `--spring.profiles.active=local` cũ, và không bật đồng thời local
 | `DB_PASSWORD` | Mật khẩu database đã đặt cho project, nhập giá trị thật không thêm dấu ngoặc/nháy |
 | `JWT_SECRET` | Chuỗi Base64 ngẫu nhiên ở mục 3 |
 | `PORT` | Tùy chọn, mặc định 8080; dùng 8081 nếu 8080 đang bị chiếm |
+| `OTP_DEV_ECHO` | `true` ở máy dev để API trả mã OTP trong response (chưa có SMS provider). Không bật ở production |
+| `BOOTSTRAP_ADMIN_PHONE` | SĐT tạo tài khoản ADMIN đầu tiên (đăng nhập bằng OTP, không mật khẩu) |
 
 Không bật **Store as project file** cho run configuration chứa secrets, không chụp ảnh màn hình các biến bí mật. `.idea/` được ignore trong project này. File `.env` không được tự nạp bởi ứng dụng.
 
@@ -128,7 +130,7 @@ ORDER BY installed_rank;
 
 Database Supabase thường có tên `postgres`, còn `fixgo` là schema, không phải tên database. `current_schema()` của SQL Editor có thể là `public`; điều đó không phản ánh schema của kết nối Java.
 
-Kiểm tra API bằng `docs/auth.http` hoặc Postman: `POST http://localhost:8080/api/v1/auth/register` với tài khoản thử do bạn chọn, sau đó `/auth/login` và `/users/me`. Không gửi password/token cho người khác. Tài khoản mới phải xuất hiện trong `fixgo.app_users` trên đúng project Supabase. Có thể kiểm tra số lượng mà không đọc dữ liệu nhạy cảm:
+Kiểm tra API theo `docs/api.md`: `POST /api/v1/auth/otp` → `POST /api/v1/auth/otp/verify` → `GET /api/v1/users/me`. Tài khoản mới phải xuất hiện trong `fixgo.app_users` (không có cột mật khẩu). Có thể kiểm tra số lượng mà không đọc dữ liệu nhạy cảm:
 
 ```sql
 SELECT count(*) AS account_count FROM fixgo.app_users;

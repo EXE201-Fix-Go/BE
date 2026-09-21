@@ -5,16 +5,18 @@ import jakarta.validation.ConstraintViolationException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.security.access.AccessDeniedException;
+import org.springframework.security.oauth2.server.resource.InvalidBearerTokenException;
+import org.springframework.web.HttpMediaTypeNotSupportedException;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
-import org.springframework.web.HttpRequestMethodNotSupportedException;
-import org.springframework.web.HttpMediaTypeNotSupportedException;
 
 import java.time.Instant;
 import java.util.LinkedHashMap;
@@ -46,6 +48,16 @@ public class ApiExceptionHandler {
     @ExceptionHandler(DataIntegrityViolationException.class)
     ResponseEntity<ApiError> duplicate(DataIntegrityViolationException ex, HttpServletRequest request) {
         return response(409, "DATA_CONFLICT", "The data conflicts with an existing record.", request);
+    }
+
+    @ExceptionHandler(OptimisticLockingFailureException.class)
+    ResponseEntity<ApiError> optimistic(OptimisticLockingFailureException ex, HttpServletRequest request) {
+        return response(409, "CONCURRENT_UPDATE", "The record was modified by someone else. Reload and retry.", request);
+    }
+
+    @ExceptionHandler(InvalidBearerTokenException.class)
+    ResponseEntity<ApiError> unauthenticated(InvalidBearerTokenException ex, HttpServletRequest request) {
+        return response(401, "UNAUTHORIZED", "A valid access token is required.", request);
     }
 
     @ExceptionHandler(AccessDeniedException.class)
