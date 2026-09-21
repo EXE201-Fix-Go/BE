@@ -16,6 +16,7 @@ $ADMIN_PHONE  = "0912345678"     # số điện thoại của BẠN -> thành t�
 # Không cần sửa bên dưới
 $DB_URL       = "jdbc:postgresql://aws-0-ap-southeast-2.pooler.supabase.com:5432/postgres?sslmode=require"
 $DB_USERNAME  = "postgres.jziazdjwazigarpmupcz"
+$DB_SCHEMA    = "fixgo_v2"       # schema rieng cua backend nay (schema "fixgo" dang do project khac quan ly)
 '@ | Set-Content -Encoding utf8 $config
     Write-Host ""
     Write-Host "Da tao file:  $config" -ForegroundColor Yellow
@@ -38,6 +39,7 @@ if (-not (Test-Path $secretFile)) {
 $env:DB_URL = $DB_URL
 $env:DB_USERNAME = $DB_USERNAME
 $env:DB_PASSWORD = $DB_PASSWORD
+$env:DB_SCHEMA = if ($DB_SCHEMA) { $DB_SCHEMA } else { "fixgo_v2" }
 $env:JWT_SECRET = (Get-Content $secretFile -Raw).Trim()
 $env:OTP_DEV_ECHO = "true"            # dev: API tra ma OTP trong response (chua co SMS)
 $env:BOOTSTRAP_ADMIN_PHONE = $ADMIN_PHONE
