@@ -5,6 +5,7 @@ import com.fixgo.common.Actor;
 import com.fixgo.dispatch.DispatchService;
 import com.fixgo.order.OrderDtos;
 import com.fixgo.order.OrderService;
+import com.fixgo.order.RescueOrderRepository;
 import com.fixgo.partner.*;
 import com.fixgo.payment.PaymentService;
 import com.fixgo.payment.Review;
@@ -50,6 +51,7 @@ public class DevSeed implements ApplicationRunner {
     private final PartnerDocumentRepository documents;
     private final ServiceCatalogRepository catalog;
     private final OrderService orders;
+    private final RescueOrderRepository orderRepo;
     private final DispatchService dispatch;
     private final QuoteService quotes;
     private final PaymentService payments;
@@ -58,8 +60,9 @@ public class DevSeed implements ApplicationRunner {
 
     public DevSeed(UserRepository users, UserIdentityRepository identities, PartnerProfileRepository profiles,
                    PartnerServiceOfferRepository offers, PartnerDocumentRepository documents,
-                   ServiceCatalogRepository catalog, OrderService orders, DispatchService dispatch,
-                   QuoteService quotes, PaymentService payments, ReviewRepository reviews, Clock clock) {
+                   ServiceCatalogRepository catalog, OrderService orders, RescueOrderRepository orderRepo,
+                   DispatchService dispatch, QuoteService quotes, PaymentService payments, ReviewRepository reviews,
+                   Clock clock) {
         this.users = users;
         this.identities = identities;
         this.profiles = profiles;
@@ -67,6 +70,7 @@ public class DevSeed implements ApplicationRunner {
         this.documents = documents;
         this.catalog = catalog;
         this.orders = orders;
+        this.orderRepo = orderRepo;
         this.dispatch = dispatch;
         this.quotes = quotes;
         this.payments = payments;
@@ -77,11 +81,8 @@ public class DevSeed implements ApplicationRunner {
     /** Deliberately NOT one big transaction: each service call must see the committed state of the previous one. */
     @Override
     public void run(ApplicationArguments args) {
-        if (identities.findByProviderAndProviderUid(IdentityProvider.PHONE, CUSTOMER_PHONE).isPresent()) {
-            log.info("DevSeed: sample data already present, skipping");
-            return;
-        }
         var now = clock.instant();
+        // Accounts are (re)asserted on every start: existing ones are approved and put online, never duplicated.
         var customer = user(Role.CUSTOMER, "Trần Thị Mai Lan", CUSTOMER_PHONE);
         var mechanic = partner("Nguyễn Văn Tuấn", MECHANIC_PHONE, PartnerType.INDIVIDUAL, null, null,
                 List.of("tire-patch", "tire-pump", "tube-replace", "battery-jump", "chain-fix"), LAT + 0.004, LNG);
@@ -94,6 +95,10 @@ public class DevSeed implements ApplicationRunner {
 
         var cust = new Actor(customer.getId(), Role.CUSTOMER);
         var mech = new Actor(mechanic.getUserId(), Role.PARTNER);
+        if (!orderRepo.findByCustomerIdOrderByCreatedAtDesc(customer.getId()).isEmpty()) {
+            log.info("DevSeed: accounts asserted; sample orders already exist, skipping");
+            return;
+        }
 
         // 1. A completed, paid and reviewed order (history / invoice screens).
         var done = orderThrough(cust, mech, "tire-patch", "Cổng KTX khu B, Làng Đại học, Thủ Đức", "Cán đinh bánh sau");
