@@ -1,0 +1,196 @@
+### Fix&Go — luồng đặt đơn end-to-end (IntelliJ HTTP Client: bấm ▶ từng request THEO THỨ TỰ)
+### Yêu cầu: backend chạy với OTP_DEV_ECHO=true và BOOTSTRAP_ADMIN_PHONE=+84900000009 (hoặc sửa @adminPhone)
+@host = http://localhost:8080/api/v1
+@customerPhone = 0901000001
+@partnerPhone = 0902000001
+@adminPhone = +84900000009
+### Toạ độ Làng Đại học (khách và thợ cách nhau ~500 m)
+@lat = 10.8700
+@lng = 106.8030
+
+### 0. Bảng giá (public)
+GET {{host}}/services
+
+### ================= KHÁCH =================
+### 1. Khách xin OTP  (devCode chỉ có khi OTP_DEV_ECHO=true)
+POST {{host}}/auth/otp
+Content-Type: application/json
+
+{"phone": "{{customerPhone}}"}
+
+> {% client.global.set("otpId", response.body.otpId); client.global.set("otpCode", response.body.devCode); %}
+
+### 2. Khách xác minh OTP → token, role = CUSTOMER
+POST {{host}}/auth/otp/verify
+Content-Type: application/json
+
+{"otpId": "{{otpId}}", "code": "{{otpCode}}", "platform": "WEB"}
+
+> {% client.global.set("customerToken", response.body.accessToken); %}
+
+### ================= THỢ (đăng ký + KYC) =================
+### 3. Thợ xin OTP
+POST {{host}}/auth/otp
+Content-Type: application/json
+
+{"phone": "{{partnerPhone}}"}
+
+> {% client.global.set("otpId", response.body.otpId); client.global.set("otpCode", response.body.devCode); %}
+
+### 4. Thợ xác minh OTP (lần đầu vẫn là CUSTOMER cho tới khi đăng ký đối tác)
+POST {{host}}/auth/otp/verify
+Content-Type: application/json
+
+{"otpId": "{{otpId}}", "code": "{{otpCode}}", "platform": "ANDROID", "deviceFingerprint": "demo-phone-1"}
+
+> {% client.global.set("partnerToken", response.body.accessToken); client.global.set("partnerUserId", response.body.user.id); %}
+
+### 5. Đăng ký đối tác + KYC (hồ sơ PENDING)
+POST {{host}}/partner-registration
+Authorization: Bearer {{partnerToken}}
+Content-Type: application/json
+
+{
+  "fullName": "Nguyễn Văn Tuấn",
+  "partnerType": "INDIVIDUAL",
+  "serviceCodes": ["tire-patch", "tire-pump", "battery-jump"],
+  "documents": [
+    {"documentType": "ID_FRONT", "storageKey": "kyc/tuan/front.jpg"},
+    {"documentType": "ID_BACK",  "storageKey": "kyc/tuan/back.jpg"},
+    {"documentType": "SELFIE",   "storageKey": "kyc/tuan/selfie.jpg"}
+  ]
+}
+
+### ================= ADMIN duyệt KYC =================
+### 6. Admin xin OTP
+POST {{host}}/auth/otp
+Content-Type: application/json
+
+{"phone": "{{adminPhone}}"}
+
+> {% client.global.set("otpId", response.body.otpId); client.global.set("otpCode", response.body.devCode); %}
+
+### 7. Admin xác minh OTP → role = ADMIN
+POST {{host}}/auth/otp/verify
+Content-Type: application/json
+
+{"otpId": "{{otpId}}", "code": "{{otpCode}}"}
+
+> {% client.global.set("adminToken", response.body.accessToken); %}
+
+### 8. Admin duyệt hồ sơ thợ
+POST {{host}}/admin/partners/{{partnerUserId}}/verify
+Authorization: Bearer {{adminToken}}
+Content-Type: application/json
+
+{"status": "APPROVED"}
+
+### 9. Thợ lên ONLINE tại vị trí (token cũ vẫn dùng được — quyền đọc từ DB)
+PATCH {{host}}/partner/me/presence
+Authorization: Bearer {{partnerToken}}
+Content-Type: application/json
+
+{"availability": "ONLINE", "lat": 10.8740, "lng": 106.8030}
+
+### ================= ĐẶT ĐƠN =================
+### 10. Khách tạo đơn → PENDING_CONFIRMATION
+POST {{host}}/orders
+Authorization: Bearer {{customerToken}}
+Content-Type: application/json
+
+{
+  "serviceId": "tire-patch",
+  "extraServiceIds": ["tire-pump"],
+  "addressText": "Cổng KTX khu B, Làng Đại học, Thủ Đức",
+  "note": "Cán đinh bánh sau",
+  "lat": {{lat}}, "lng": {{lng}},
+  "photoUrls": ["https://example.com/scene.jpg"]
+}
+
+> {% client.global.set("orderId", response.body.id); %}
+
+### 11. Khách xác nhận phí gọi thợ 30k → REQUESTED (broadcast vòng 1)
+POST {{host}}/orders/{{orderId}}/confirm
+Authorization: Bearer {{customerToken}}
+
+### 12. Thợ xem lời mời
+GET {{host}}/partner/offers
+Authorization: Bearer {{partnerToken}}
+
+> {% client.global.set("assignmentId", response.body[0].assignmentId); %}
+
+### 13. Thợ nhận đơn → ASSIGNED
+POST {{host}}/partner/offers/{{assignmentId}}/accept
+Authorization: Bearer {{partnerToken}}
+
+### 14. Khách theo dõi (thấy thông tin thợ)
+GET {{host}}/orders/{{orderId}}
+Authorization: Bearer {{customerToken}}
+
+### 15. Thợ tới nơi → ARRIVED
+POST {{host}}/orders/{{orderId}}/arrive
+Authorization: Bearer {{partnerToken}}
+
+### 16. Thợ kiểm tra xe → CHECKING
+POST {{host}}/orders/{{orderId}}/check
+Authorization: Bearer {{partnerToken}}
+
+### 17. Thợ gửi báo giá → WAITING_FOR_APPROVAL (tổng = 30k phí + các dòng)
+POST {{host}}/orders/{{orderId}}/quotes
+Authorization: Bearer {{partnerToken}}
+Content-Type: application/json
+
+{
+  "items": [
+    {"itemType": "LABOR", "description": "Vá xe lưu động", "quantity": 1, "unitPrice": 80000, "serviceId": "tire-patch"},
+    {"itemType": "PART",  "description": "Miếng vá",        "quantity": 2, "unitPrice": 10000}
+  ]
+}
+
+> {% client.global.set("quoteId", response.body.id); %}
+
+### 18. (Thử sai) Thợ tự duyệt báo giá → 403
+POST {{host}}/orders/{{orderId}}/quotes/{{quoteId}}/approve
+Authorization: Bearer {{partnerToken}}
+
+### 19. Khách duyệt → APPROVED → IN_PROGRESS
+POST {{host}}/orders/{{orderId}}/quotes/{{quoteId}}/approve
+Authorization: Bearer {{customerToken}}
+
+### 20. (Tuỳ chọn) Phát sinh: thợ gửi revision 2 (ghi lại TOÀN BỘ giá trị) → ADDITIONAL_QUOTE
+POST {{host}}/orders/{{orderId}}/quotes
+Authorization: Bearer {{partnerToken}}
+Content-Type: application/json
+
+{
+  "items": [
+    {"itemType": "LABOR", "description": "Vá xe lưu động", "quantity": 1, "unitPrice": 80000},
+    {"itemType": "PART",  "description": "Miếng vá",        "quantity": 2, "unitPrice": 10000},
+    {"itemType": "PART",  "description": "Van xe mới",      "quantity": 1, "unitPrice": 30000}
+  ]
+}
+
+> {% client.global.set("quoteId", response.body.id); %}
+
+### 21. Khách duyệt revision 2 → IN_PROGRESS
+POST {{host}}/orders/{{orderId}}/quotes/{{quoteId}}/approve
+Authorization: Bearer {{customerToken}}
+
+### 22. Thợ hoàn tất → COMPLETED, tạo khoản thanh toán PENDING
+POST {{host}}/orders/{{orderId}}/complete
+Authorization: Bearer {{partnerToken}}
+
+### 23. Khách bấm "Đã thanh toán"
+POST {{host}}/orders/{{orderId}}/payment/confirm
+Authorization: Bearer {{customerToken}}
+
+### 24. Khách đánh giá
+POST {{host}}/orders/{{orderId}}/review
+Authorization: Bearer {{customerToken}}
+Content-Type: application/json
+
+{"rating": 5, "feedback": "Nhanh, đúng giá"}
+
+### 25. Xem lại đơn đầy đủ (history đủ 11 bước)
+GET {{host}}/orders/{{orderId}}
+Authorization: Bearer {{customerToken}}
