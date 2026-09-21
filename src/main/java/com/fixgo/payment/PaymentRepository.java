@@ -15,4 +15,8 @@ public interface PaymentRepository extends JpaRepository<Payment, UUID> {
     Optional<Payment> lockByOrderIdAndStatus(UUID orderId, Payment.Status status);
 
     boolean existsByIdempotencyKey(String key);
+
+    @Query("select coalesce(sum(p.amount), 0) from Payment p where p.collectedByPartnerId = :partnerId "
+            + "and p.status = :status and p.confirmedAt >= :since")
+    java.math.BigDecimal sumCollectedSince(UUID partnerId, Payment.Status status, java.time.Instant since);
 }

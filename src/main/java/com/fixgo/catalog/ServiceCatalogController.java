@@ -9,13 +9,13 @@ import java.util.List;
 @RestController
 @RequestMapping("/api/v1/services")
 public class ServiceCatalogController {
-    private final ServiceCatalogRepository services;
+    private final ServiceCatalogCache services;
 
-    public ServiceCatalogController(ServiceCatalogRepository services) { this.services = services; }
+    public ServiceCatalogController(ServiceCatalogCache services) { this.services = services; }
 
     @GetMapping
     public List<ServiceResponse> list() {
-        return services.findByActiveTrueOrderBySortOrderAsc().stream().map(ServiceResponse::from).toList();
+        return services.active().stream().map(ServiceResponse::from).toList();
     }
 
     public record ServiceResponse(String id, String name, String description, BigDecimal price) {

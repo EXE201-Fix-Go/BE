@@ -144,19 +144,25 @@ abstract class OrderFlowContract {
         assertThat(quotes.get(0).path("status").asText()).isEqualTo("SUPERSEDED");
         assertThat(quotes.get(1).path("status").asText()).isEqualTo("APPROVED");
 
-        // Complete → payment due = latest APPROVED total, not the sum of revisions (RB-42).
+        // Complete = partner collected cash: payment CONFIRMED with the latest APPROVED total, not the sum (RB-42, RB-59).
         o = read(postJson("/api/v1/orders/" + orderId + "/complete", partner.token, null).andExpect(status().isOk()).andReturn());
         assertThat(o.path("status").asText()).isEqualTo("COMPLETED");
-        assertThat(o.path("payment").path("status").asText()).isEqualTo("PENDING");
-        assertThat(o.path("payment").path("amount").decimalValue().intValue()).isEqualTo(30000 + 80000 + 20000 + 30000);
-
-        // "Đã thanh toán" by the customer, then a single review.
-        o = read(postJson("/api/v1/orders/" + orderId + "/payment/confirm", customer.token, null).andExpect(status().isOk()).andReturn());
         assertThat(o.path("payment").path("status").asText()).isEqualTo("CONFIRMED");
+        assertThat(o.path("payment").path("amount").decimalValue().intValue()).isEqualTo(30000 + 80000 + 20000 + 30000);
+        postJson("/api/v1/orders/" + orderId + "/payment/confirm", customer.token, null).andExpect(status().isNotFound());
+        var stats = read(mvc.perform(get("/api/v1/partner/stats").header("Authorization", "Bearer " + partner.token))
+                .andExpect(status().isOk()).andReturn());
+        assertThat(stats.path("completedToday").asLong()).isEqualTo(1);
+        assertThat(stats.path("earnedToday").decimalValue().intValue()).isEqualTo(160000);
+
+        // A single review, by the customer only.
         postJson("/api/v1/orders/" + orderId + "/review", customer.token, Map.of("rating", 5, "feedback", "Nhanh, gọn"))
                 .andExpect(status().isCreated());
         postJson("/api/v1/orders/" + orderId + "/review", customer.token, Map.of("rating", 4)).andExpect(status().isConflict());
         postJson("/api/v1/orders/" + orderId + "/review", partner.token, Map.of("rating", 5)).andExpect(status().isNotFound());
+        stats = read(mvc.perform(get("/api/v1/partner/stats").header("Authorization", "Bearer " + partner.token)).andReturn());
+        assertThat(stats.path("averageRating").asDouble()).isEqualTo(5.0);
+        assertThat(stats.path("reviewCount").asLong()).isEqualTo(1);
 
         // History has every hop, in order.
         var history = o.path("history");

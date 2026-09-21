@@ -1,6 +1,6 @@
 package com.fixgo.quote;
 
-import com.fixgo.catalog.ServiceCatalogRepository;
+import com.fixgo.catalog.ServiceCatalogCache;
 import com.fixgo.common.Actor;
 import com.fixgo.common.ApiException;
 import com.fixgo.order.*;
@@ -18,13 +18,13 @@ import java.util.UUID;
 public class QuoteService {
     private final QuoteRepository quotes;
     private final RescueOrderRepository orders;
-    private final ServiceCatalogRepository catalog;
+    private final ServiceCatalogCache catalog;
     private final OrderService orderService;
     private final OrderStateMachine stateMachine;
     private final QuoteMapper mapper;
     private final Clock clock;
 
-    public QuoteService(QuoteRepository quotes, RescueOrderRepository orders, ServiceCatalogRepository catalog,
+    public QuoteService(QuoteRepository quotes, RescueOrderRepository orders, ServiceCatalogCache catalog,
                         OrderService orderService, OrderStateMachine stateMachine, QuoteMapper mapper, Clock clock) {
         this.quotes = quotes;
         this.orders = orders;
@@ -56,7 +56,7 @@ public class QuoteService {
                 request.validMinutes() == null ? null : now.plus(Duration.ofMinutes(request.validMinutes())));
         for (var item : request.items()) {
             UUID serviceId = item.serviceId() == null ? null
-                    : catalog.findByCodeAndActiveTrue(item.serviceId()).map(s -> s.getId()).orElse(null);
+                    : catalog.activeByCode(item.serviceId()).map(s -> s.getId()).orElse(null);
             quote.addItem(item.itemType(), item.description().strip(), item.quantity(), item.unitPrice(), serviceId);
         }
         if (quote.getTotalAmount().signum() < 0) {

@@ -1,7 +1,7 @@
 package com.fixgo.order;
 
 import com.fixgo.catalog.ServiceCatalog;
-import com.fixgo.catalog.ServiceCatalogRepository;
+import com.fixgo.catalog.ServiceCatalogCache;
 import com.fixgo.common.Actor;
 import com.fixgo.common.ApiException;
 import com.fixgo.common.PhoneNumbers;
@@ -39,7 +39,7 @@ public class OrderService {
     private final RescueOrderRepository orders;
     private final OrderStatusHistoryRepository history;
     private final OrderAssignmentRepository assignments;
-    private final ServiceCatalogRepository catalog;
+    private final ServiceCatalogCache catalog;
     private final CallOutFeeConfigRepository feeConfigs;
     private final PartnerProfileRepository partners;
     private final UserRepository users;
@@ -52,7 +52,7 @@ public class OrderService {
     private final Clock clock;
 
     public OrderService(RescueOrderRepository orders, OrderStatusHistoryRepository history,
-                        OrderAssignmentRepository assignments, ServiceCatalogRepository catalog,
+                        OrderAssignmentRepository assignments, ServiceCatalogCache catalog,
                         CallOutFeeConfigRepository feeConfigs, PartnerProfileRepository partners, UserRepository users,
                         UserIdentityRepository identities, QuoteRepository quotes, QuoteMapper quoteMapper,
                         DispatchService dispatch, PaymentService payments, OrderStateMachine stateMachine, Clock clock) {
@@ -79,7 +79,7 @@ public class OrderService {
     public OrderDtos.OrderResponse create(Actor actor, OrderDtos.CreateOrderRequest request) {
         if (!actor.is(Role.CUSTOMER)) throw forbidden();
         var now = clock.instant();
-        var service = catalog.findByCodeAndActiveTrue(request.serviceId())
+        var service = catalog.activeByCode(request.serviceId())
                 .orElseThrow(() -> new ApiException(HttpStatus.BAD_REQUEST, "UNKNOWN_SERVICE", "Unknown service."));
         var fee = feeConfigs.findActiveGlobal(now)
                 .orElseThrow(() -> new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "FEE_CONFIG_MISSING",
@@ -95,7 +95,7 @@ public class OrderService {
                 request.lat(), request.lng(), request.addressText().strip(), request.note(),
                 request.vehicleDescription(), fee.getFeeAmount(), fee.getId(), now);
         if (request.extraServiceIds() != null && !request.extraServiceIds().isEmpty()) {
-            var extras = catalog.findByCodeInAndActiveTrue(request.extraServiceIds());
+            var extras = catalog.activeByCodes(request.extraServiceIds());
             if (extras.size() != request.extraServiceIds().stream().distinct().count()) {
                 throw new ApiException(HttpStatus.BAD_REQUEST, "UNKNOWN_SERVICE", "Unknown extra service.");
             }
@@ -200,6 +200,8 @@ public class OrderService {
         partners.lockById(actor.userId()).ifPresent(p -> p.setAvailability(Availability.ONLINE));
         payments.createPending(orderId, approved.getId(), actor.userId(), approved.getTotalAmount(),
                 "order:" + orderId + ":final");
+        // Pilot: the partner collects cash when finishing, so completing IS the payment confirmation (RB-59).
+        payments.confirmIfPending(actor, orderId);
         return toResponse(order);
     }
 
@@ -265,17 +267,12 @@ public class OrderService {
 
     @Transactional(readOnly = true)
     public OrderDtos.OrderResponse toResponse(RescueOrder o) {
-        var service = catalog.findById(o.getRequestedServiceId()).orElse(null);
-        Map<UUID, ServiceCatalog> extras = catalog.findAllById(o.getExtraServiceIds()).stream()
-                .collect(Collectors.toMap(ServiceCatalog::getId, Function.identity()));
-        var partner = dispatch.currentAssignment(o.getId()).map(a -> {
-            var u = users.findById(a.getPartnerId()).orElse(null);
-            var p = partners.findById(a.getPartnerId()).orElse(null);
-            return new OrderDtos.PartnerSummary(a.getPartnerId(), u == null ? null : u.getFullName(),
-                    identities.findPrimaryUid(a.getPartnerId()).orElse(null),
-                    p == null ? null : p.getCurrentLat(), p == null ? null : p.getCurrentLng(),
-                    a.getAcceptedAt(), a.getArrivedAt());
-        }).orElse(null);
+        var service = catalog.byId(o.getRequestedServiceId()).orElse(null);
+        Map<UUID, ServiceCatalog> extras = catalog.byIds(o.getExtraServiceIds());
+        var partner = assignments.findPartnerSummary(o.getId(), OrderAssignment.Status.ACCEPTED).stream().findFirst()
+                .map(r -> new OrderDtos.PartnerSummary((UUID) r[0], (String) r[1], (String) r[2], (Double) r[3],
+                        (Double) r[4], (java.time.Instant) r[5], (java.time.Instant) r[6]))
+                .orElse(null);
         var quote = quotes.findFirstByOrderIdOrderByRevisionNoDesc(o.getId()).map(quoteMapper::toResponse).orElse(null);
         var payment = payments.latest(o.getId()).map(p -> new OrderDtos.PaymentSummary(p.getId(), p.getAmount(),
                 p.getStatus().name(), p.getMethod().name(), p.getConfirmedAt())).orElse(null);

@@ -38,6 +38,13 @@ public class PaymentService {
         return payment;
     }
 
+    /** Same as confirm but a no-op when nothing is pending (idempotent completion). */
+    @Transactional
+    public void confirmIfPending(Actor actor, UUID orderId) {
+        payments.lockByOrderIdAndStatus(orderId, Payment.Status.PENDING)
+                .ifPresent(p -> p.confirm(actor.userId(), ActorType.of(actor.role()), clock.instant()));
+    }
+
     @Transactional(readOnly = true)
     public Optional<Payment> latest(UUID orderId) {
         return payments.findFirstByOrderIdOrderByCreatedAtDesc(orderId);

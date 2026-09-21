@@ -1,7 +1,7 @@
 package com.fixgo.quote;
 
 import com.fixgo.catalog.ServiceCatalog;
-import com.fixgo.catalog.ServiceCatalogRepository;
+import com.fixgo.catalog.ServiceCatalogCache;
 import org.springframework.stereotype.Component;
 import java.util.Map;
 import java.util.Objects;
@@ -10,13 +10,13 @@ import java.util.stream.Collectors;
 
 @Component
 public class QuoteMapper {
-    private final ServiceCatalogRepository catalog;
+    private final ServiceCatalogCache catalog;
 
-    public QuoteMapper(ServiceCatalogRepository catalog) { this.catalog = catalog; }
+    public QuoteMapper(ServiceCatalogCache catalog) { this.catalog = catalog; }
 
     public QuoteDtos.QuoteResponse toResponse(Quote q) {
         var serviceIds = q.getItems().stream().map(QuoteItem::getServiceId).filter(Objects::nonNull).distinct().toList();
-        Map<UUID, String> codes = serviceIds.isEmpty() ? Map.of() : catalog.findAllById(serviceIds).stream()
+        Map<UUID, String> codes = catalog.byIds(serviceIds).values().stream()
                 .collect(Collectors.toMap(ServiceCatalog::getId, ServiceCatalog::getCode));
         var items = q.getItems().stream().map(i -> new QuoteDtos.ItemResponse(i.getId(), i.getLineNo(),
                 i.getItemType(), i.getDescription(), i.getQuantity(), i.getUnitPrice(), i.getLineAmount(),

@@ -1,6 +1,6 @@
 package com.fixgo.partner;
 
-import com.fixgo.catalog.ServiceCatalogRepository;
+import com.fixgo.catalog.ServiceCatalogCache;
 import com.fixgo.common.Actor;
 import com.fixgo.common.ApiException;
 import com.fixgo.common.PhoneNumbers;
@@ -17,13 +17,13 @@ public class PartnerProfileService {
     private final PartnerProfileRepository profiles;
     private final PartnerDocumentRepository documents;
     private final PartnerServiceOfferRepository offers;
-    private final ServiceCatalogRepository catalog;
+    private final ServiceCatalogCache catalog;
     private final UserRepository users;
     private final UserIdentityRepository identities;
     private final Clock clock;
 
     public PartnerProfileService(PartnerProfileRepository profiles, PartnerDocumentRepository documents,
-                                 PartnerServiceOfferRepository offers, ServiceCatalogRepository catalog,
+                                 PartnerServiceOfferRepository offers, ServiceCatalogCache catalog,
                                  UserRepository users, UserIdentityRepository identities, Clock clock) {
         this.profiles = profiles;
         this.documents = documents;
@@ -101,7 +101,7 @@ public class PartnerProfileService {
         var staff = profiles.save(new PartnerProfile(staffUser.getId(), PartnerType.SHOP_STAFF, shop.getUserId(), null));
         // Staff inherit the shop's service list until they manage their own.
         replaceServices(staff.getUserId(), offers.findByPartnerId(shop.getUserId()).stream()
-                .map(o -> catalog.findById(o.getServiceId()).map(s -> s.getCode()).orElse(null))
+                .map(o -> catalog.byId(o.getServiceId()).map(s -> s.getCode()).orElse(null))
                 .filter(c -> c != null).toList());
         return listStaff(actor);
     }
@@ -134,7 +134,7 @@ public class PartnerProfileService {
     }
 
     private void replaceServices(UUID partnerId, List<String> codes) {
-        var found = catalog.findByCodeInAndActiveTrue(codes);
+        var found = catalog.activeByCodes(codes);
         if (found.size() != codes.stream().distinct().count()) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "UNKNOWN_SERVICE", "One of the service codes is unknown.");
         }
@@ -144,7 +144,7 @@ public class PartnerProfileService {
 
     private PartnerDtos.ProfileResponse toResponse(PartnerProfile p, User u) {
         var codes = offers.findByPartnerId(p.getUserId()).stream()
-                .map(o -> catalog.findById(o.getServiceId()).map(s -> s.getCode()).orElse(null))
+                .map(o -> catalog.byId(o.getServiceId()).map(s -> s.getCode()).orElse(null))
                 .filter(c -> c != null).sorted().toList();
         var docs = documents.findByPartnerIdOrderByCreatedAtAsc(p.getUserId()).stream()
                 .map(d -> new PartnerDtos.DocumentResponse(d.getId(), d.getDocumentType(), d.getReviewStatus())).toList();

@@ -13,11 +13,18 @@ import java.util.List;
 @PreAuthorize("hasRole('PARTNER')")
 public class PartnerController {
     private final PartnerProfileService service;
+    private final PartnerStatsService stats;
 
-    public PartnerController(PartnerProfileService service) { this.service = service; }
+    public PartnerController(PartnerProfileService service, PartnerStatsService stats) {
+        this.service = service;
+        this.stats = stats;
+    }
 
     @GetMapping("/me")
     public PartnerDtos.ProfileResponse me(Authentication auth) { return service.me(Actor.of(auth)); }
+
+    @GetMapping("/stats")
+    public PartnerDtos.StatsResponse stats(Authentication auth) { return stats.stats(Actor.of(auth)); }
 
     @PatchMapping("/me/presence")
     public PartnerDtos.ProfileResponse presence(Authentication auth, @Valid @RequestBody PartnerDtos.PresenceRequest request) {

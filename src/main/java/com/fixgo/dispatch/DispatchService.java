@@ -1,6 +1,6 @@
 package com.fixgo.dispatch;
 
-import com.fixgo.catalog.ServiceCatalogRepository;
+import com.fixgo.catalog.ServiceCatalogCache;
 import com.fixgo.common.Actor;
 import com.fixgo.common.ApiException;
 import com.fixgo.config.DispatchPolicy;
@@ -30,14 +30,14 @@ public class DispatchService {
     private final DispatchPolicyRepository policies;
     private final PartnerProfileRepository partners;
     private final RescueOrderRepository orders;
-    private final ServiceCatalogRepository catalog;
+    private final ServiceCatalogCache catalog;
     private final OrderStateMachine stateMachine;
     private final DispatchProperties properties;
     private final Clock clock;
 
     public DispatchService(DispatchRoundRepository rounds, OrderAssignmentRepository assignments,
                            DispatchPolicyRepository policies, PartnerProfileRepository partners,
-                           RescueOrderRepository orders, ServiceCatalogRepository catalog,
+                           RescueOrderRepository orders, ServiceCatalogCache catalog,
                            OrderStateMachine stateMachine, DispatchProperties properties, Clock clock) {
         this.rounds = rounds;
         this.assignments = assignments;
@@ -200,7 +200,7 @@ public class DispatchService {
     }
 
     private DispatchDtos.OfferResponse toOffer(OrderAssignment a, RescueOrder o) {
-        var service = catalog.findById(o.getRequestedServiceId()).orElse(null);
+        var service = catalog.byId(o.getRequestedServiceId()).orElse(null);
         int roundNo = a.getDispatchRoundId() == null ? 0
                 : rounds.findById(a.getDispatchRoundId()).map(DispatchRound::getRoundNo).orElse(0);
         return new DispatchDtos.OfferResponse(a.getId(), o.getId(), o.getOrderCode(), o.getStatus(),

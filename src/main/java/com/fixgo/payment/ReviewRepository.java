@@ -7,4 +7,8 @@ import java.util.UUID;
 public interface ReviewRepository extends JpaRepository<Review, UUID> {
     Optional<Review> findByOrderId(UUID orderId);
     boolean existsByOrderId(UUID orderId);
+
+    @org.springframework.data.jpa.repository.Query(
+            "select avg(r.rating), count(r) from Review r where r.partnerId = :partnerId and r.hidden = false")
+    Object[] ratingSummary(UUID partnerId);
 }

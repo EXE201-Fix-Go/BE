@@ -1,6 +1,6 @@
 package com.fixgo.admin;
 
-import com.fixgo.catalog.ServiceCatalogRepository;
+import com.fixgo.catalog.ServiceCatalogCache;
 import com.fixgo.common.Actor;
 import com.fixgo.dispatch.DispatchService;
 import com.fixgo.order.OrderDtos;
@@ -49,7 +49,7 @@ public class DevSeed implements ApplicationRunner {
     private final PartnerProfileRepository profiles;
     private final PartnerServiceOfferRepository offers;
     private final PartnerDocumentRepository documents;
-    private final ServiceCatalogRepository catalog;
+    private final ServiceCatalogCache catalog;
     private final OrderService orders;
     private final RescueOrderRepository orderRepo;
     private final DispatchService dispatch;
@@ -60,7 +60,7 @@ public class DevSeed implements ApplicationRunner {
 
     public DevSeed(UserRepository users, UserIdentityRepository identities, PartnerProfileRepository profiles,
                    PartnerServiceOfferRepository offers, PartnerDocumentRepository documents,
-                   ServiceCatalogRepository catalog, OrderService orders, RescueOrderRepository orderRepo,
+                   ServiceCatalogCache catalog, OrderService orders, RescueOrderRepository orderRepo,
                    DispatchService dispatch, QuoteService quotes, PaymentService payments, ReviewRepository reviews,
                    Clock clock) {
         this.users = users;
@@ -168,7 +168,7 @@ public class DevSeed implements ApplicationRunner {
         p.updatePresence(Availability.ONLINE, lat, lng, now);
         profiles.save(p);
         for (var code : serviceCodes) {
-            catalog.findByCodeAndActiveTrue(code).ifPresent(s -> offers.save(new PartnerServiceOffer(u.getId(), s.getId())));
+            catalog.activeByCode(code).ifPresent(s -> offers.save(new PartnerServiceOffer(u.getId(), s.getId())));
         }
         for (var doc : List.of("ID_FRONT", "ID_BACK", "SELFIE")) {
             var d = new PartnerDocument(u.getId(), doc, "kyc/" + phone + "/" + doc.toLowerCase() + ".jpg", now);

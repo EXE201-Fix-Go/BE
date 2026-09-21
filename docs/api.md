@@ -35,7 +35,7 @@ Số điện thoại lần đầu → tài khoản `CUSTOMER`. OTP: 6 số, 5 ph
 | `GET /orders/{id}/status` | **poll rẻ** `{id, orderCode, status, version}` — FE poll cái này, chỉ tải đơn đầy đủ khi status đổi |
 | `POST /orders/{id}/cancel {"reason"}` | BR09; hủy sau khi thợ đã tới → phát sinh `payment` phí gọi thợ (30k, `quote_id` NULL) |
 | `POST /orders/{id}/quotes/{qid}/approve` · `/decline {"reason"?}` | chỉ khách của đơn (RB-45); approve → `APPROVED` → `IN_PROGRESS` |
-| `POST /orders/{id}/payment/confirm` | "Đã thanh toán" (tiền mặt, thợ giữ tiền — RB-59) |
+| `POST /orders/{id}/payment/confirm` | dự phòng: xác nhận khoản đang PENDING (vd phí gọi thợ khi hủy). Đơn hoàn tất thì thợ đã thu tiền → payment tự CONFIRMED |
 | `POST /orders/{id}/review {"rating":1..5,"feedback"?}` | sau `COMPLETED`, 1 lần/đơn |
 
 ## Điều phối & thực hiện (thợ)
@@ -45,9 +45,10 @@ Số điện thoại lần đầu → tài khoản `CUSTOMER`. OTP: 6 số, 5 ph
 | `POST /partner/offers/{assignmentId}/accept` | ai nhận trước được (RB-36); người sau nhận 409 |
 | `POST /partner/offers/{assignmentId}/decline` | |
 | `GET /partner/jobs` | đơn đang thực hiện |
+| `GET /partner/stats` | `{completedToday, earnedToday, completedTotal, averageRating, reviewCount, activeJobs}` cho dashboard |
 | `POST /orders/{id}/arrive` → `/check` | `ASSIGNED → ARRIVED → CHECKING` |
 | `POST /orders/{id}/quotes {items:[{itemType: LABOR\|PART\|SURCHARGE\|DISCOUNT\|SUPPORT, description, quantity, unitPrice, serviceId?}], validMinutes?}` | từ `CHECKING` = `INITIAL`; từ `IN_PROGRESS` = `ADDITIONAL` (BR03). Mỗi revision chứa **toàn bộ** giá trị đơn (RB-42). Tối đa 1 `SENT`/đơn (RB-46). Không sửa bản đã gửi — tạo revision mới (C-02) |
-| `POST /orders/{id}/pause` · `/resume` · `/complete` | `complete` cần báo giá `APPROVED` (BR02); tạo `payment` PENDING = tổng bản APPROVED mới nhất |
+| `POST /orders/{id}/pause` · `/resume` · `/complete` | `complete` cần báo giá `APPROVED` (BR02); ghi `payment` = tổng bản APPROVED mới nhất và **CONFIRMED bởi PARTNER** (thợ thu tiền mặt tại chỗ — RB-59) |
 
 Vòng điều phối (`dispatch_policies`, BR08): 2 km/60 s → 4 km/75 s → 7 km/90 s (vòng cuối). Hết vòng cuối không ai nhận → `NO_PARTNER_FOUND` (RB-34). Đơn `PENDING_CONFIRMATION` quá 10 phút → `EXPIRED`.
 

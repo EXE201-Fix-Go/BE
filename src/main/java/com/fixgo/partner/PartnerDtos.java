@@ -38,6 +38,10 @@ public final class PartnerDtos {
 
     public record DocumentResponse(UUID id, String documentType, String reviewStatus) { }
 
+    /** GET /partner/stats — dashboard tiles; "today" is Vietnam time (BRD pilot in HCMC). */
+    public record StatsResponse(long completedToday, java.math.BigDecimal earnedToday, long completedTotal,
+                                Double averageRating, long reviewCount, long activeJobs) { }
+
     public record StaffResponse(UUID userId, String fullName, String phone, VerificationStatus verificationStatus,
                                 Availability availability) { }
 }
