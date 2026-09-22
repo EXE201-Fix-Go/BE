@@ -8,6 +8,7 @@ import com.fixgo.user.Role;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.List;
@@ -58,6 +59,14 @@ public class QuoteService {
             UUID serviceId = item.serviceId() == null ? null
                     : catalog.activeByCode(item.serviceId()).map(s -> s.getId()).orElse(null);
             quote.addItem(item.itemType(), item.description().strip(), item.quantity(), item.unitPrice(), serviceId);
+        }
+        // Travel fee is system-derived from the accept-time distance snapshot (RB-23), not entered by the partner.
+        // Only the initial quote carries it; additional revisions do not re-charge travel.
+        if (type == Quote.Type.INITIAL && order.getTravelFeeSnapshot() != null
+                && order.getTravelFeeSnapshot().signum() > 0) {
+            var km = order.getTravelDistanceKm() == null ? BigDecimal.ZERO : order.getTravelDistanceKm();
+            quote.addItem(QuoteItem.Type.TRAVEL, "Phí di chuyển " + km.stripTrailingZeros().toPlainString() + " km",
+                    BigDecimal.ONE, order.getTravelFeeSnapshot(), null);
         }
         if (quote.getTotalAmount().signum() < 0) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "NEGATIVE_TOTAL", "Discounts exceed the quote total.");

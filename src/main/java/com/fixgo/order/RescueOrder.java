@@ -43,6 +43,13 @@ public class RescueOrder {
     private UUID callOutFeeConfigId;
     @Column(name = "call_out_fee_confirmed_at")
     private Instant callOutFeeConfirmedAt;
+    /** Straight-line km from the accepting partner to the pickup, snapshotted at accept time (nullable until then). */
+    @Column(name = "travel_distance_km")
+    private BigDecimal travelDistanceKm;
+    @Column(name = "travel_fee_snapshot")
+    private BigDecimal travelFeeSnapshot;
+    @Column(name = "travel_fee_config_id")
+    private UUID travelFeeConfigId;
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 25)
     private OrderStatus status;
@@ -103,6 +110,12 @@ public class RescueOrder {
     void moveTo(OrderStatus next) { this.status = next; }
 
     public void confirmCallOutFee(Instant now) { callOutFeeConfirmedAt = now; confirmedAt = now; }
+    /** Snapshotted once when a partner accepts (RB-23: rate comes from travel_fee_configs, not code). */
+    public void recordTravel(BigDecimal distanceKm, BigDecimal fee, UUID configId) {
+        this.travelDistanceKm = distanceKm;
+        this.travelFeeSnapshot = fee;
+        this.travelFeeConfigId = configId;
+    }
     public void markCompleted(Instant now) { completedAt = now; }
     public void recordCancellation(UUID by, ActorType source, String reason, Instant now) {
         cancelledBy = by;
@@ -124,6 +137,9 @@ public class RescueOrder {
     public String getPickupNote() { return pickupNote; }
     public BigDecimal getCallOutFeeSnapshot() { return callOutFeeSnapshot; }
     public Instant getCallOutFeeConfirmedAt() { return callOutFeeConfirmedAt; }
+    public BigDecimal getTravelDistanceKm() { return travelDistanceKm; }
+    public BigDecimal getTravelFeeSnapshot() { return travelFeeSnapshot; }
+    public UUID getTravelFeeConfigId() { return travelFeeConfigId; }
     public OrderStatus getStatus() { return status; }
     public Instant getCreatedAt() { return createdAt; }
     public Instant getConfirmedAt() { return confirmedAt; }

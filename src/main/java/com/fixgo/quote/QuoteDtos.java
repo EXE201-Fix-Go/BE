@@ -26,7 +26,8 @@ public final class QuoteDtos {
                                BigDecimal unitPrice, BigDecimal lineAmount, String serviceId) { }
 
     public record QuoteResponse(UUID id, UUID orderId, int revisionNo, Quote.Type quoteType, Quote.Status status,
-                                BigDecimal callOutFeeAmount, BigDecimal laborAmount, BigDecimal partsAmount,
-                                BigDecimal surchargeAmount, BigDecimal discountAmount, BigDecimal totalAmount,
-                                Instant sentAt, Instant decidedAt, String declineReason, List<ItemResponse> items) { }
+                                BigDecimal callOutFeeAmount, BigDecimal laborAmount, BigDecimal travelAmount,
+                                BigDecimal partsAmount, BigDecimal surchargeAmount, BigDecimal discountAmount,
+                                BigDecimal totalAmount, Instant sentAt, Instant decidedAt, String declineReason,
+                                List<ItemResponse> items) { }
 }
