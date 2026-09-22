@@ -1,7 +1,7 @@
 # ==========================================
 # Bước 1: Build ứng dụng (Build Stage)
 # ==========================================
-FROM maven:3.9.6-eclipse-temurin-25 AS builder
+FROM maven:3.9.6-eclipse-temurin-21 AS builder
 
 # Thiết lập thư mục làm việc trong container
 WORKDIR /app
@@ -22,7 +22,7 @@ RUN mvn clean package -DskipTests
 # Bước 2: Chạy ứng dụng (Run Stage)
 # ==========================================
 # Sử dụng image JRE (chỉ chứa môi trường chạy Java) siêu nhẹ
-FROM eclipse-temurin:25-jre-alpine
+FROM eclipse-temurin:21-jre-alpine
 
 WORKDIR /app
 
