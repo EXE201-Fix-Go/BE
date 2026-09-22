@@ -285,7 +285,8 @@ public class OrderService {
                         .map(ServiceCatalog::getCode).toList(),
                 o.getPickupAddressText(), o.getPickupNote(), List.copyOf(o.getPhotoUrls()),
                 o.getContactName(), o.getContactPhone(), o.getPickupLat(),
-                o.getPickupLng(), o.getCallOutFeeSnapshot(), o.getCreatedAt(), o.getConfirmedAt(), o.getCompletedAt(),
+                o.getPickupLng(), o.getCallOutFeeSnapshot(), o.getTravelDistanceKm(), o.getTravelFeeSnapshot(),
+                o.getCreatedAt(), o.getConfirmedAt(), o.getCompletedAt(),
                 partner, quote, payment, o.getCancellationSource(), o.getCancellationReason(), o.getCancelledAt(),
                 entries);
     }

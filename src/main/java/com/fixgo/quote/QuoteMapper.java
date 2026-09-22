@@ -23,7 +23,7 @@ public class QuoteMapper {
                 i.getServiceId() == null ? null : codes.get(i.getServiceId())))
                 .toList();
         return new QuoteDtos.QuoteResponse(q.getId(), q.getOrderId(), q.getRevisionNo(), q.getQuoteType(),
-                q.getStatus(), q.getCallOutFeeAmount(), q.getLaborAmount(), q.getPartsAmount(),
+                q.getStatus(), q.getCallOutFeeAmount(), q.getLaborAmount(), q.getTravelAmount(), q.getPartsAmount(),
                 q.getSurchargeAmount(), q.getDiscountAmount(), q.getTotalAmount(), q.getSentAt(), q.getDecidedAt(),
                 q.getDeclineReason(), items);
     }

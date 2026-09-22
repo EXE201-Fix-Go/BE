@@ -32,6 +32,8 @@ public class Quote {
     private BigDecimal callOutFeeAmount;
     @Column(name = "labor_amount", nullable = false)
     private BigDecimal laborAmount;
+    @Column(name = "travel_amount", nullable = false)
+    private BigDecimal travelAmount;
     @Column(name = "parts_amount", nullable = false)
     private BigDecimal partsAmount;
     @Column(name = "surcharge_amount", nullable = false)
@@ -69,6 +71,7 @@ public class Quote {
         this.status = Status.DRAFT;
         this.callOutFeeAmount = callOutFee;
         this.laborAmount = BigDecimal.ZERO;
+        this.travelAmount = BigDecimal.ZERO;
         this.partsAmount = BigDecimal.ZERO;
         this.surchargeAmount = BigDecimal.ZERO;
         this.discountAmount = BigDecimal.ZERO;
@@ -82,12 +85,14 @@ public class Quote {
         items.add(item);
         switch (type) {
             case LABOR, SUPPORT -> laborAmount = laborAmount.add(item.getLineAmount());
+            case TRAVEL -> travelAmount = travelAmount.add(item.getLineAmount());
             case PART -> partsAmount = partsAmount.add(item.getLineAmount());
             case SURCHARGE -> surchargeAmount = surchargeAmount.add(item.getLineAmount());
             case DISCOUNT -> discountAmount = discountAmount.add(item.getLineAmount());
         }
         // RB-47
-        totalAmount = callOutFeeAmount.add(laborAmount).add(partsAmount).add(surchargeAmount).subtract(discountAmount);
+        totalAmount = callOutFeeAmount.add(laborAmount).add(travelAmount).add(partsAmount)
+                .add(surchargeAmount).subtract(discountAmount);
     }
 
     public void send(Instant now) { status = Status.SENT; sentAt = now; }
@@ -105,6 +110,7 @@ public class Quote {
     public Status getStatus() { return status; }
     public BigDecimal getCallOutFeeAmount() { return callOutFeeAmount; }
     public BigDecimal getLaborAmount() { return laborAmount; }
+    public BigDecimal getTravelAmount() { return travelAmount; }
     public BigDecimal getPartsAmount() { return partsAmount; }
     public BigDecimal getSurchargeAmount() { return surchargeAmount; }
     public BigDecimal getDiscountAmount() { return discountAmount; }

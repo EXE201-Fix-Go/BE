@@ -8,7 +8,7 @@ import java.util.UUID;
 @Entity
 @Table(name = "quote_items")
 public class QuoteItem {
-    public enum Type { LABOR, PART, SURCHARGE, DISCOUNT, SUPPORT }
+    public enum Type { LABOR, PART, SURCHARGE, DISCOUNT, SUPPORT, TRAVEL }
 
     @Id
     private UUID id;
