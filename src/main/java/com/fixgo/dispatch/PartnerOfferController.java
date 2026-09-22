@@ -21,8 +21,9 @@ public class PartnerOfferController {
     public List<DispatchDtos.OfferResponse> offers(Authentication auth) { return dispatch.listOffers(Actor.of(auth)); }
 
     @PostMapping("/offers/{assignmentId}/accept")
-    public DispatchDtos.OfferResponse accept(Authentication auth, @PathVariable UUID assignmentId) {
-        return dispatch.accept(Actor.of(auth), assignmentId);
+    public DispatchDtos.OfferResponse accept(Authentication auth, @PathVariable UUID assignmentId,
+                                             @Valid @RequestBody(required = false) DispatchDtos.AcceptRequest request) {
+        return dispatch.accept(Actor.of(auth), assignmentId, request);
     }
 
     @PostMapping("/offers/{assignmentId}/decline")

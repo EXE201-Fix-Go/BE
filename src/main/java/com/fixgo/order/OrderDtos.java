@@ -39,7 +39,8 @@ public final class OrderDtos {
     public record OrderResponse(UUID id, String orderCode, OrderStatus status, String serviceId, String serviceName,
                                 List<String> extraServiceIds, String addressText, String note, List<String> photoUrls,
                                 String contactName, String contactPhone,
-                                Double lat, Double lng, BigDecimal callOutFee, Instant createdAt, Instant confirmedAt,
+                                Double lat, Double lng, BigDecimal callOutFee, BigDecimal travelDistanceKm,
+                                BigDecimal travelFee, Instant createdAt, Instant confirmedAt,
                                 Instant completedAt, PartnerSummary partner, QuoteDtos.QuoteResponse quote,
                                 PaymentSummary payment, ActorType cancellationSource, String cancellationReason,
                                 Instant cancelledAt, List<HistoryEntry> history) { }

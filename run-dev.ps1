@@ -46,6 +46,13 @@ $env:DEV_SEED = "true"                # dev: tao tai khoan + don mau (chi chay 1
 $env:OTP_MAX_PER_TARGET_PER_HOUR = "100"   # dev: test nhieu lan khong bi 429
 $env:OTP_MAX_PER_IP_PER_HOUR = "1000"
 $env:BOOTSTRAP_ADMIN_PHONE = $ADMIN_PHONE
+# Tuy chon: dat toa do noi ban test de tho mau (DevSeed) xuat hien gan do -> dat don khong bi NO_PARTNER_FOUND.
+# Dien $SEED_LAT / $SEED_LNG trong .local\config.ps1 (lay tu Google Maps hoac chip GPS tren app). Bo trong = dung khu pilot Thu Duc.
+if ($SEED_LAT) { $env:DEV_SEED_LAT = $SEED_LAT }
+if ($SEED_LNG) { $env:DEV_SEED_LNG = $SEED_LNG }
+# Tuy chon: dat rieng vi tri tho Trinh Van Son (mechanic3) de test phi di chuyen tu 1 diem cu the.
+if ($MECH3_LAT) { $env:DEV_SEED_MECH3_LAT = $MECH3_LAT }
+if ($MECH3_LNG) { $env:DEV_SEED_MECH3_LNG = $MECH3_LNG }
 
 Write-Host "Dang chay backend... (Ctrl+C de dung). Sau khi thay 'Started FixGoApplication', mo docs\order-flow.http de test." -ForegroundColor Green
 Set-Location $root

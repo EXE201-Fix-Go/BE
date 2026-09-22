@@ -3,11 +3,14 @@ package com.fixgo.dispatch;
 import com.fixgo.catalog.ServiceCatalogCache;
 import com.fixgo.common.Actor;
 import com.fixgo.common.ApiException;
+import com.fixgo.common.GeoDistance;
 import com.fixgo.config.DispatchPolicy;
 import com.fixgo.config.DispatchPolicyRepository;
 import com.fixgo.config.DispatchProperties;
+import com.fixgo.config.TravelFeeConfigRepository;
 import com.fixgo.order.*;
 import com.fixgo.partner.Availability;
+import com.fixgo.partner.PartnerProfile;
 import com.fixgo.partner.PartnerProfileRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -15,6 +18,8 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.List;
@@ -33,12 +38,14 @@ public class DispatchService {
     private final ServiceCatalogCache catalog;
     private final OrderStateMachine stateMachine;
     private final DispatchProperties properties;
+    private final TravelFeeConfigRepository travelFees;
     private final Clock clock;
 
     public DispatchService(DispatchRoundRepository rounds, OrderAssignmentRepository assignments,
                            DispatchPolicyRepository policies, PartnerProfileRepository partners,
                            RescueOrderRepository orders, ServiceCatalogCache catalog,
-                           OrderStateMachine stateMachine, DispatchProperties properties, Clock clock) {
+                           OrderStateMachine stateMachine, DispatchProperties properties,
+                           TravelFeeConfigRepository travelFees, Clock clock) {
         this.rounds = rounds;
         this.assignments = assignments;
         this.policies = policies;
@@ -47,6 +54,7 @@ public class DispatchService {
         this.catalog = catalog;
         this.stateMachine = stateMachine;
         this.properties = properties;
+        this.travelFees = travelFees;
         this.clock = clock;
     }
 
@@ -123,9 +131,13 @@ public class DispatchService {
                 .stream().map(this::toOffer).filter(o -> !o.orderStatus().isTerminal()).toList();
     }
 
+    public DispatchDtos.OfferResponse accept(Actor partner, UUID assignmentId) {
+        return accept(partner, assignmentId, null);
+    }
+
     /** RB-36: the conditional UPDATE on rescue_orders decides who wins; everything else follows from it. */
     @Transactional
-    public DispatchDtos.OfferResponse accept(Actor partner, UUID assignmentId) {
+    public DispatchDtos.OfferResponse accept(Actor partner, UUID assignmentId, DispatchDtos.AcceptRequest req) {
         var now = clock.instant();
         var assignment = assignments.lockById(assignmentId).orElseThrow(DispatchService::offerNotFound);
         if (!assignment.getPartnerId().equals(partner.userId())) throw offerNotFound();
@@ -133,6 +145,10 @@ public class DispatchService {
             throw new ApiException(HttpStatus.CONFLICT, "OFFER_CLOSED", "This offer has expired or was withdrawn.");
         }
         var profile = partners.lockById(partner.userId()).orElseThrow(DispatchService::offerNotFound);
+        // Mốc tính phí di chuyển = vị trí GPS thợ ngay lúc bấm nhận (nếu app gửi lên), thay cho vị trí lúc online.
+        if (req != null && req.lat() != null && req.lng() != null) {
+            profile.updatePresence(Availability.ONLINE, req.lat(), req.lng(), now);
+        }
         if (!profile.canTakeOrders()) {                                  // RB-16 re-check inside the transaction
             throw new ApiException(HttpStatus.FORBIDDEN, "PARTNER_NOT_ELIGIBLE", "Your profile cannot take orders.");
         }
@@ -149,9 +165,24 @@ public class DispatchService {
                     .filter(a -> !a.getId().equals(assignment.getId())).forEach(a -> a.expire(now));
         }
         var order = orders.findById(assignment.getOrderId()).orElseThrow(DispatchService::offerNotFound);
+        snapshotTravel(order, profile, now);
         stateMachine.recordExternal(order.getId(), OrderStatus.REQUESTED, OrderStatus.ASSIGNED, partner.userId(),
                 ActorType.PARTNER, "Accepted by broadcast");
         return toOffer(assignment, order);
+    }
+
+    /** Snapshots straight-line km from the partner's location to the pickup and the resulting travel fee (RB-23). */
+    private void snapshotTravel(RescueOrder order, PartnerProfile profile, java.time.Instant now) {
+        if (profile.getCurrentLat() == null || profile.getCurrentLng() == null) return;
+        var cfg = travelFees.findActiveGlobal(now).orElse(null);
+        if (cfg == null) return;
+        double km = GeoDistance.haversineKm(profile.getCurrentLat(), profile.getCurrentLng(),
+                order.getPickupLat(), order.getPickupLng());
+        BigDecimal distanceKm = BigDecimal.valueOf(km).setScale(1, RoundingMode.HALF_UP);
+        BigDecimal billableKm = distanceKm.subtract(cfg.getFreeKm()).max(BigDecimal.ZERO)
+                .setScale(0, RoundingMode.CEILING);
+        BigDecimal fee = billableKm.multiply(cfg.getPerKmAmount()).setScale(0, RoundingMode.HALF_UP);
+        order.recordTravel(distanceKm, fee, cfg.getId());
     }
 
     @Transactional
