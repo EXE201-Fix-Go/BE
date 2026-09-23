@@ -23,8 +23,10 @@ import java.math.RoundingMode;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 /** Broadcast dispatch (BRD §3.5, BR07/BR08, RB-34..36). */
 @Service
@@ -87,10 +89,11 @@ public class DispatchService {
             }
             return;
         }
-        for (UUID partnerId : candidates) {
-            assignments.save(new OrderAssignment(order.getId(), round.getId(), partnerId,
-                    OrderAssignment.Source.BROADCAST, null, now, expiresAt));
-        }
+        List<OrderAssignment> newAssignments = candidates.stream()
+                .map(partnerId -> new OrderAssignment(order.getId(), round.getId(), partnerId,
+                        OrderAssignment.Source.BROADCAST, null, now, expiresAt))
+                .toList();
+        assignments.saveAll(newAssignments);
         // dispatch_notifications (PUSH/ZALO/SMS) are recorded here once a provider is wired up.
     }
 
@@ -120,15 +123,29 @@ public class DispatchService {
     @Transactional(readOnly = true)
     public List<DispatchDtos.OfferResponse> listOffers(Actor partner) {
         var now = clock.instant();
-        return assignments.findByPartnerIdAndStatusOrderByOfferedAtDesc(partner.userId(), OrderAssignment.Status.OFFERED)
-                .stream().filter(a -> a.isOpenOffer(now))
-                .map(this::toOffer).filter(o -> o.orderStatus() == OrderStatus.REQUESTED).toList();
+        List<OrderAssignment> list = assignments
+                .findByPartnerIdAndStatusOrderByOfferedAtDesc(partner.userId(), OrderAssignment.Status.OFFERED)
+                .stream().filter(a -> a.isOpenOffer(now)).toList();
+        // Batch-load orders and rounds in 2 IN queries instead of N×2 individual findById calls.
+        Map<UUID, com.fixgo.order.RescueOrder> orderMap = batchLoadOrders(list);
+        Map<UUID, DispatchRound> roundMap = batchLoadRounds(list);
+        return list.stream()
+                .map(a -> toOfferBatch(a, orderMap, roundMap))
+                .filter(o -> o != null && o.orderStatus() == OrderStatus.REQUESTED)
+                .toList();
     }
 
     @Transactional(readOnly = true)
     public List<DispatchDtos.OfferResponse> listActiveJobs(Actor partner) {
-        return assignments.findByPartnerIdAndStatusOrderByOfferedAtDesc(partner.userId(), OrderAssignment.Status.ACCEPTED)
-                .stream().map(this::toOffer).filter(o -> !o.orderStatus().isTerminal()).toList();
+        List<OrderAssignment> list = assignments
+                .findByPartnerIdAndStatusOrderByOfferedAtDesc(partner.userId(), OrderAssignment.Status.ACCEPTED);
+        // Batch-load orders and rounds in 2 IN queries instead of N×2 individual findById calls.
+        Map<UUID, com.fixgo.order.RescueOrder> orderMap = batchLoadOrders(list);
+        Map<UUID, DispatchRound> roundMap = batchLoadRounds(list);
+        return list.stream()
+                .map(a -> toOfferBatch(a, orderMap, roundMap))
+                .filter(o -> o != null && !o.orderStatus().isTerminal())
+                .toList();
     }
 
     public DispatchDtos.OfferResponse accept(Actor partner, UUID assignmentId) {
@@ -164,7 +181,9 @@ public class DispatchService {
             assignments.findByDispatchRoundId(assignment.getDispatchRoundId()).stream()
                     .filter(a -> !a.getId().equals(assignment.getId())).forEach(a -> a.expire(now));
         }
-        var order = orders.findById(assignment.getOrderId()).orElseThrow(DispatchService::offerNotFound);
+        // Load order AFTER compareAndSetStatus succeeds: status is now ASSIGNED in DB, lockById reads it fresh.
+        // This replaces the old findById() that came after, eliminating one separate SELECT round-trip.
+        var order = orders.lockById(assignment.getOrderId()).orElseThrow(DispatchService::offerNotFound);
         snapshotTravel(order, profile, now);
         stateMachine.recordExternal(order.getId(), OrderStatus.REQUESTED, OrderStatus.ASSIGNED, partner.userId(),
                 ActorType.PARTNER, "Accepted by broadcast");
@@ -226,14 +245,62 @@ public class DispatchService {
         }
     }
 
-    private DispatchDtos.OfferResponse toOffer(OrderAssignment a) {
-        return toOffer(a, orders.findById(a.getOrderId()).orElseThrow(DispatchService::offerNotFound));
+    // -------------------------------------------------------------------------
+    // Batch helpers — used by listOffers() and listActiveJobs() to avoid N+1
+    // -------------------------------------------------------------------------
+
+    /** Collect all distinct orderIds from a list of assignments, then load them in one IN query. */
+    private Map<UUID, com.fixgo.order.RescueOrder> batchLoadOrders(List<OrderAssignment> list) {
+        List<UUID> orderIds = list.stream().map(OrderAssignment::getOrderId).distinct().toList();
+        if (orderIds.isEmpty()) return Map.of();
+        return orders.findAllByIdIn(orderIds).stream()
+                .collect(Collectors.toMap(com.fixgo.order.RescueOrder::getId, o -> o));
     }
 
+    /** Collect all distinct non-null dispatchRoundIds, then load them in one IN query. */
+    private Map<UUID, DispatchRound> batchLoadRounds(List<OrderAssignment> list) {
+        List<UUID> roundIds = list.stream()
+                .map(OrderAssignment::getDispatchRoundId)
+                .filter(id -> id != null)
+                .distinct().toList();
+        if (roundIds.isEmpty()) return Map.of();
+        return rounds.findAllByIdIn(roundIds).stream()
+                .collect(Collectors.toMap(DispatchRound::getId, r -> r));
+    }
+
+    /**
+     * Map a single assignment to OfferResponse using pre-loaded maps.
+     * Returns null if the order is missing (data inconsistency — caller should filter).
+     */
+    private DispatchDtos.OfferResponse toOfferBatch(
+            OrderAssignment a,
+            Map<UUID, com.fixgo.order.RescueOrder> orderMap,
+            Map<UUID, DispatchRound> roundMap) {
+        var o = orderMap.get(a.getOrderId());
+        if (o == null) return null;
+        return toOffer(a, o, roundMap);
+    }
+
+    // -------------------------------------------------------------------------
+    // Single-item helpers — kept for accept() which already has the order loaded
+    // -------------------------------------------------------------------------
+
+    /** Used in accept(): order is already loaded from the write-path, no extra query needed. */
     private DispatchDtos.OfferResponse toOffer(OrderAssignment a, RescueOrder o) {
+        return toOffer(a, o, Map.of());
+    }
+
+    private DispatchDtos.OfferResponse toOffer(OrderAssignment a, RescueOrder o, Map<UUID, DispatchRound> roundMap) {
         var service = catalog.byId(o.getRequestedServiceId()).orElse(null);
-        int roundNo = a.getDispatchRoundId() == null ? 0
-                : rounds.findById(a.getDispatchRoundId()).map(DispatchRound::getRoundNo).orElse(0);
+        int roundNo = 0;
+        if (a.getDispatchRoundId() != null) {
+            var round = roundMap.get(a.getDispatchRoundId());
+            if (round == null) {
+                // Fallback: single query only in single-item context (accept() path)
+                round = rounds.findById(a.getDispatchRoundId()).orElse(null);
+            }
+            roundNo = round != null ? round.getRoundNo() : 0;
+        }
         return new DispatchDtos.OfferResponse(a.getId(), o.getId(), o.getOrderCode(), o.getStatus(),
                 service == null ? null : service.getCode(), service == null ? null : service.getName(),
                 o.getPickupAddressText(), o.getPickupNote(), o.getPickupLat(), o.getPickupLng(),

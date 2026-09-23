@@ -20,4 +20,8 @@ public interface DispatchRoundRepository extends JpaRepository<DispatchRound, UU
     List<UUID> findExpiredOpenIds(Instant now);
 
     Optional<DispatchRound> findFirstByOrderIdOrderByRoundNoDesc(UUID orderId);
+
+    /** Batch-load rounds by IDs in a single IN query (avoids N+1 in listOffers / listActiveJobs). */
+    @Query("select r from DispatchRound r where r.id in :ids")
+    List<DispatchRound> findAllByIdIn(@org.springframework.data.repository.query.Param("ids") List<UUID> ids);
 }

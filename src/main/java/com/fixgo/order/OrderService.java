@@ -105,7 +105,7 @@ public class OrderService {
         if (request.photoUrls() != null) order.getPhotoUrls().addAll(request.photoUrls());
         orders.save(order);
         stateMachine.recordCreation(order, actor.userId());
-        return toResponse(order);
+        return toSimpleResponse(order);
     }
 
     /** BR01: the customer confirms the call-out fee, then the order enters dispatch. */
@@ -116,7 +116,7 @@ public class OrderService {
         order.confirmCallOutFee(clock.instant());
         stateMachine.transition(order, OrderStatus.REQUESTED, actor.userId(), ActorType.CUSTOMER, "Call-out fee confirmed");
         dispatch.startRound(order, 1);
-        return toResponse(order);
+        return toSimpleResponse(order);
     }
 
     /** BR09: who, when, why. Customer, assigned partner or admin; legality of the state is checked by the machine. */
@@ -289,6 +289,27 @@ public class OrderService {
                 o.getCreatedAt(), o.getConfirmedAt(), o.getCompletedAt(),
                 partner, quote, payment, o.getCancellationSource(), o.getCancellationReason(), o.getCancelledAt(),
                 entries);
+    }
+
+    /**
+     * Lightweight variant of toResponse() for write-path mutations (create, confirm).
+     * Skips 4 DB round-trips for partner/quote/payment/history that are always empty right after creation.
+     * Uses only in-memory ServiceCatalogCache — zero extra DB queries.
+     */
+    private OrderDtos.OrderResponse toSimpleResponse(RescueOrder o) {
+        var service = catalog.byId(o.getRequestedServiceId()).orElse(null);
+        Map<UUID, ServiceCatalog> extras = catalog.byIds(o.getExtraServiceIds());
+        return new OrderDtos.OrderResponse(o.getId(), o.getOrderCode(), o.getStatus(),
+                service == null ? null : service.getCode(), service == null ? null : service.getName(),
+                o.getExtraServiceIds().stream().map(id -> extras.get(id)).filter(s -> s != null)
+                        .map(ServiceCatalog::getCode).toList(),
+                o.getPickupAddressText(), o.getPickupNote(), List.copyOf(o.getPhotoUrls()),
+                o.getContactName(), o.getContactPhone(), o.getPickupLat(),
+                o.getPickupLng(), o.getCallOutFeeSnapshot(), o.getTravelDistanceKm(), o.getTravelFeeSnapshot(),
+                o.getCreatedAt(), o.getConfirmedAt(), o.getCompletedAt(),
+                null, null, null,
+                o.getCancellationSource(), o.getCancellationReason(), o.getCancelledAt(),
+                List.of());
     }
 
     public static ApiException notFound() {

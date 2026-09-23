@@ -1,4 +1,4 @@
-spring:
+﻿spring:
   application:
     name: fixgo-backend
   datasource:
@@ -7,16 +7,19 @@ spring:
     password: ${DB_PASSWORD}
     driver-class-name: org.postgresql.Driver
     hikari:
-      maximum-pool-size: ${DB_POOL_SIZE:5}
-      minimum-idle: 1
-      connection-timeout: 30000
+      maximum-pool-size: ${DB_POOL_SIZE:10}
+      minimum-idle: ${DB_POOL_MIN_IDLE:3}
+      connection-timeout: 10000
+      idle-timeout: 300000
+      max-lifetime: 1800000
+      keepalive-time: 60000
       # PostGIS on Supabase lives in the "extensions" schema; keep it on the search path.
       connection-init-sql: SET search_path TO ${DB_SCHEMA:fixgo}, extensions, public
   jpa:
     open-in-view: false
     hibernate:
       ddl-auto: validate
-    show-sql: true #Bật tắt show sql trong console
+    show-sql: false
     properties:
       hibernate:
         default_schema: ${DB_SCHEMA:fixgo}

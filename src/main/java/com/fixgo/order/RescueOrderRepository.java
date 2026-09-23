@@ -20,6 +20,10 @@ public interface RescueOrderRepository extends JpaRepository<RescueOrder, UUID> 
     @Query("select o from RescueOrder o where o.status = :status and o.createdAt < :before")
     List<RescueOrder> findByStatusCreatedBefore(OrderStatus status, Instant before);
 
+    /** Batch-load orders by IDs in a single IN query (avoids N+1 in listOffers / listActiveJobs). */
+    @Query("select o from RescueOrder o where o.id in :ids")
+    List<RescueOrder> findAllByIdIn(@org.springframework.data.repository.query.Param("ids") List<UUID> ids);
+
     /**
      * RB-36: first partner to claim wins. The conditional UPDATE is the arbiter; callers check the row count.
      * The version bump keeps JPA optimistic locking consistent for anyone holding the entity.
