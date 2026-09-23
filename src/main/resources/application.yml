@@ -49,7 +49,7 @@ fixgo:
     otp-max-per-target-per-hour: ${OTP_MAX_PER_TARGET_PER_HOUR:5}
     otp-max-per-ip-per-hour: ${OTP_MAX_PER_IP_PER_HOUR:30}
     # Dev only: echo the OTP code in the API response because no SMS provider is chosen yet (BRD §8).
-    otp-dev-echo: ${OTP_DEV_ECHO:true}
+    otp-dev-echo: ${OTP_DEV_ECHO:false}
   dispatch:
     pending-confirmation-ttl: 10m
     scheduler-enabled: ${DISPATCH_SCHEDULER:true}
