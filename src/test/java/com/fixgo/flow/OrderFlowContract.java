@@ -2,9 +2,9 @@ package com.fixgo.flow;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fixgo.dispatch.DispatchService;
 import com.fixgo.support.TestClock;
 import org.junit.jupiter.api.Test;
+import com.fixgo.module.dispatch.service.DispatchService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;

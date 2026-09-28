@@ -1,6 +1,7 @@
-package com.fixgo.order;
+package com.fixgo.module.order;
 
 import org.junit.jupiter.api.Test;
+import com.fixgo.module.order.enums.OrderStatus;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
