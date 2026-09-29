@@ -11,18 +11,18 @@ spring:
       minimum-idle: 1
       connection-timeout: 30000
       # PostGIS on Supabase lives in the "extensions" schema; keep it on the search path.
-      connection-init-sql: SET search_path TO ${DB_SCHEMA:fixgo}, extensions, public
+      connection-init-sql: SET search_path TO ${DB_SCHEMA:fixgo_v2}, extensions, public
   jpa:
     open-in-view: false
     hibernate:
       ddl-auto: validate
     properties:
       hibernate:
-        default_schema: ${DB_SCHEMA:fixgo}
+        default_schema: ${DB_SCHEMA:fixgo_v2}
   flyway:
     enabled: true
-    schemas: ${DB_SCHEMA:fixgo}
-    default-schema: ${DB_SCHEMA:fixgo}
+    schemas: ${DB_SCHEMA:fixgo_v2}
+    default-schema: ${DB_SCHEMA:fixgo_v2}
     baseline-on-migrate: false
   jackson:
     deserialization:
