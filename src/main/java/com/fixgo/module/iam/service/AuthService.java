@@ -16,6 +16,7 @@ import java.security.SecureRandom;
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Duration;
+import java.util.Locale;
 import java.util.UUID;
 
 /** OTP + self-managed JWT (QD-12). No passwords anywhere (C-06). */
@@ -85,12 +86,16 @@ public class AuthService {
 
         var identity = identities.findByProviderAndProviderUid(IdentityProvider.PHONE, challenge.getTarget())
                 .orElseGet(() -> {
-                    var user = users.save(new User(Role.CUSTOMER, null, now));
+                    var user = users.save(new User(Role.CUSTOMER, generateGuestName(), now));
                     return identities.save(new UserIdentity(user, IdentityProvider.PHONE, challenge.getTarget(),
                             true, now, now));
-                });
+        });
         identity.markVerified(now);
         var user = identity.getUser();
+        if (user.getRole() == Role.CUSTOMER
+                && (user.getFullName() == null || user.getFullName().isBlank())) {
+            user.rename(generateGuestName());
+        }
         if (!user.isActive()) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ACCOUNT_LOCKED", "This account is locked.");
         }
@@ -134,6 +139,11 @@ public class AuthService {
 
     static String hashOf(UUID otpId, String code) {
         return TokenService.hash(otpId + ":" + code);
+    }
+
+    private String generateGuestName() {
+        int suffix = 1_000_000 + random.nextInt(9_000_000);
+        return String.format(Locale.ROOT, "Guest%07d", suffix);
     }
 
     private static ApiException invalidOtp() {
