@@ -8,12 +8,15 @@ import com.fixgo.module.iam.service.*;
 
 import com.fixgo.module.partner.enums.PartnerType;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.UUID;
 
 public record UserResponse(UUID id, String fullName, String phone, Role role, AppRole appRole,
-                           AccountStatus status, Instant createdAt) {
+                           AccountStatus status, Instant createdAt, String email,
+                           LocalDate dateOfBirth, String avatarUrl) {
     public static UserResponse from(User user, String phone, PartnerType partnerType) {
         return new UserResponse(user.getId(), user.getFullName(), phone, user.getRole(),
-                AppRole.of(user.getRole(), partnerType), user.getStatus(), user.getCreatedAt());
+                AppRole.of(user.getRole(), partnerType), user.getStatus(), user.getCreatedAt(),
+                user.getEmail(), user.getDateOfBirth(), user.getAvatarUrl());
     }
 }

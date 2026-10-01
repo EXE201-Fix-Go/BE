@@ -12,6 +12,7 @@ import com.fixgo.module.partner.enums.PartnerType;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import java.time.LocalDate;
 import java.util.UUID;
 
 @Service
@@ -36,6 +37,15 @@ public class UserService {
         var user = users.lockById(id).orElseThrow(UserService::notFound);
         if (!user.isActive()) throw new ApiException(HttpStatus.FORBIDDEN, "ACCOUNT_LOCKED", "This account is locked.");
         user.rename(fullName);
+        return toResponse(user);
+    }
+
+    @Transactional
+    public UserResponse updateProfile(UUID id, String fullName, String email,
+                                      LocalDate dateOfBirth, String avatarUrl) {
+        var user = users.lockById(id).orElseThrow(UserService::notFound);
+        if (!user.isActive()) throw new ApiException(HttpStatus.FORBIDDEN, "ACCOUNT_LOCKED", "This account is locked.");
+        user.updateProfile(fullName, email, dateOfBirth, avatarUrl);
         return toResponse(user);
     }
 

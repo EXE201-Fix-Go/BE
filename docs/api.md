@@ -17,7 +17,8 @@ cho mọi endpoint trừ OTP/refresh và `GET /services`. Field lạ trong body 
 Số điện thoại lần đầu → tài khoản `CUSTOMER`. OTP: 6 số, 5 phút, 5 lần thử, dùng một lần (RB-03), giới hạn theo số & IP (RB-04).
 
 ## Người dùng
-- `GET /users/me`, `PATCH /users/me {"fullName"}`.
+- `GET /users/me` trả về `fullName`, số điện thoại, `email`, `dateOfBirth` (ISO `yyyy-MM-dd`) và `avatarUrl`.
+- `PATCH /users/me` nhận `{"fullName", "email?", "dateOfBirth?":"yyyy-MM-dd", "avatarUrl?"}`; số điện thoại lấy từ identity và không được chỉnh sửa trong endpoint này.
 
 ## Đối tác
 - `POST /partner-registration` (tài khoản vừa OTP): `{fullName, partnerType: INDIVIDUAL|SHOP, shopName?, serviceCodes[], documents[{documentType: ID_FRONT|ID_BACK|SELFIE|LICENSE|OTHER, storageKey}]}` → hồ sơ `PENDING` (BR06).
