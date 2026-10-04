@@ -54,6 +54,12 @@ public class QuoteService {
     @Transactional
     public QuoteDtos.QuoteResponse send(Actor actor, UUID orderId, QuoteDtos.CreateQuoteRequest request) {
         var order = orderService.lockAssigned(actor, orderId);
+        // The travel fee is derived from the accept-time distance snapshot, so a client may never submit it:
+        // it would be charged twice.
+        if (request.items().stream().anyMatch(i -> i.itemType() == QuoteItem.Type.TRAVEL)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "TRAVEL_FEE_NOT_EDITABLE",
+                    "The travel fee is added by the system and cannot be sent in a quote.");
+        }
         if (quotes.findFirstByOrderIdAndStatus(orderId, Quote.Status.SENT).isPresent()) {
             throw new ApiException(HttpStatus.CONFLICT, "QUOTE_ALREADY_SENT", "A quote is already awaiting the customer.");
         }
@@ -72,9 +78,8 @@ public class QuoteService {
             quote.addItem(item.itemType(), item.description().strip(), item.quantity(), item.unitPrice(), serviceId);
         }
         // Travel fee is system-derived from the accept-time distance snapshot (RB-23), not entered by the partner.
-        // Only the initial quote carries it; additional revisions do not re-charge travel.
-        if (type == Quote.Type.INITIAL && order.getTravelFeeSnapshot() != null
-                && order.getTravelFeeSnapshot().signum() > 0) {
+        // Every revision carries the whole order value (RB-42), so every revision carries the travel fee too.
+        if (order.getTravelFeeSnapshot() != null && order.getTravelFeeSnapshot().signum() > 0) {
             var km = order.getTravelDistanceKm() == null ? BigDecimal.ZERO : order.getTravelDistanceKm();
             quote.addItem(QuoteItem.Type.TRAVEL, "Phí di chuyển " + km.stripTrailingZeros().toPlainString() + " km",
                     BigDecimal.ONE, order.getTravelFeeSnapshot(), null);

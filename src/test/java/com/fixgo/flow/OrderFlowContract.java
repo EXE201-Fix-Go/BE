@@ -239,6 +239,96 @@ abstract class OrderFlowContract {
         assertThat(o.path("payment").path("amount").decimalValue().intValue()).isEqualTo(30000);
     }
 
+    // ------------------------------------------------------------------ one job at a time
+
+    @Test
+    void aPartnerWorksOneOrderAtATime() throws Exception {
+        var loc = nextLocation();
+        var partner = approvedOnlinePartner(loc, "tire-patch");
+        var first = loginNew();
+        var second = loginNew();
+        String firstOrder = confirmedOrder(first, loc, "tire-patch");
+        String secondOrder = confirmedOrder(second, loc, "tire-patch");
+        var offers = read(mvc.perform(get("/api/v1/partner/offers").header("Authorization", "Bearer " + partner.token))
+                .andExpect(status().isOk()).andReturn());
+        assertThat(offers).hasSize(2);
+        String offerForFirst = offerIdFor(offers, firstOrder);
+        String offerForSecond = offerIdFor(offers, secondOrder);
+
+        postJson("/api/v1/partner/offers/" + offerForFirst + "/accept", partner.token, null).andExpect(status().isOk());
+        // A second offer is refused while the first order is open, and that order stays up for grabs.
+        postJson("/api/v1/partner/offers/" + offerForSecond + "/accept", partner.token, Map.of("lat", loc[0], "lng", loc[1]))
+                .andExpect(status().isConflict()).andExpect(jsonPath("$.code").value("PARTNER_BUSY"));
+        assertThat(orderStatus(second, secondOrder)).isEqualTo("REQUESTED");
+        assertThat(availabilityOf(partner)).isEqualTo("BUSY");
+
+        // Neither ONLINE (a second job) nor OFFLINE (abandoning the customer) while the order is open.
+        for (String wanted : List.of("ONLINE", "OFFLINE")) {
+            presence(partner, wanted, loc).andExpect(status().isConflict())
+                    .andExpect(jsonPath("$.code").value("PARTNER_HAS_ACTIVE_JOB"));
+        }
+        presence(partner, "BUSY", loc).andExpect(status().isOk());      // a location ping keeps working
+        assertThat(availabilityOf(partner)).isEqualTo("BUSY");
+
+        // Finishing the order frees the partner for the waiting offer.
+        driveToCompletion(firstOrder, first, partner);
+        assertThat(availabilityOf(partner)).isEqualTo("ONLINE");
+        postJson("/api/v1/partner/offers/" + offerForSecond + "/accept", partner.token, null)
+                .andExpect(status().isOk()).andExpect(jsonPath("$.orderStatus").value("ASSIGNED"));
+        // …and cancelling the second order frees them again.
+        postJson("/api/v1/orders/" + secondOrder + "/cancel", second.token, Map.of("reason", "Đổi ý")).andExpect(status().isOk());
+        presence(partner, "OFFLINE", loc).andExpect(status().isOk());
+    }
+
+    // ------------------------------------------------------------------ quote revisions keep the travel fee
+
+    @Test
+    void everyQuoteRevisionCarriesTheTravelFeeAndClientsCannotSendIt() throws Exception {
+        var loc = nextLocation();
+        var customer = loginNew();
+        var partner = approvedOnlinePartner(new double[] {loc[0] + 0.0135, loc[1]}, "tire-patch");   // ~1.5 km: inside round 1
+        String orderId = confirmedOrder(customer, loc, "tire-patch");
+        acceptFirstOffer(partner);
+        var accepted = read(mvc.perform(get("/api/v1/orders/" + orderId).header("Authorization", "Bearer " + customer.token)).andReturn());
+        int travel = accepted.path("travelFee").decimalValue().intValue();
+        assertThat(travel).as("the partner is farther than the free distance").isPositive();
+        postJson("/api/v1/orders/" + orderId + "/arrive", partner.token, null).andExpect(status().isOk());
+        postJson("/api/v1/orders/" + orderId + "/check", partner.token, null).andExpect(status().isOk());
+
+        // The travel fee is system-derived: a client-supplied TRAVEL line would be charged twice.
+        postJson("/api/v1/orders/" + orderId + "/quotes", partner.token, Map.of("items", List.of(
+                Map.of("itemType", "LABOR", "description", "Vá xe", "quantity", 1, "unitPrice", 80000),
+                Map.of("itemType", "TRAVEL", "description", "Phí đi lại", "quantity", 1, "unitPrice", 99000))))
+                .andExpect(status().isBadRequest()).andExpect(jsonPath("$.code").value("TRAVEL_FEE_NOT_EDITABLE"));
+
+        var rev1 = read(postJson("/api/v1/orders/" + orderId + "/quotes", partner.token, Map.of("items", List.of(
+                Map.of("itemType", "LABOR", "description", "Vá xe", "quantity", 1, "unitPrice", 80000))))
+                .andExpect(status().isCreated()).andReturn());
+        assertThat(rev1.path("travelAmount").decimalValue().intValue()).isEqualTo(travel);
+        assertThat(rev1.path("totalAmount").decimalValue().intValue()).isEqualTo(30000 + travel + 80000);
+        postJson("/api/v1/orders/" + orderId + "/quotes/" + rev1.path("id").asText() + "/approve", customer.token, null)
+                .andExpect(status().isOk());
+
+        // RB-42: the revision holds the WHOLE order value, so it must still include the travel fee.
+        var rev2 = read(postJson("/api/v1/orders/" + orderId + "/quotes", partner.token, Map.of("items", List.of(
+                Map.of("itemType", "LABOR", "description", "Vá xe", "quantity", 1, "unitPrice", 80000),
+                Map.of("itemType", "PART", "description", "Van mới", "quantity", 1, "unitPrice", 50000))))
+                .andExpect(status().isCreated()).andReturn());
+        assertThat(rev2.path("quoteType").asText()).isEqualTo("ADDITIONAL");
+        assertThat(rev2.path("travelAmount").decimalValue().intValue()).isEqualTo(travel);
+        assertThat(rev2.path("totalAmount").decimalValue().intValue()).isEqualTo(30000 + travel + 80000 + 50000);
+        assertThat(rev2.path("items").findValues("itemType").stream().filter(t -> "TRAVEL".equals(t.asText())).count())
+                .as("exactly one travel line").isEqualTo(1);
+        postJson("/api/v1/orders/" + orderId + "/quotes/" + rev2.path("id").asText() + "/approve", customer.token, null)
+                .andExpect(status().isOk());
+
+        var done = read(postJson("/api/v1/orders/" + orderId + "/complete", partner.token, null)
+                .andExpect(status().isOk()).andReturn());
+        assertThat(done.path("payment").path("amount").decimalValue().intValue())
+                .as("the customer pays the latest revision in full, travel included")
+                .isEqualTo(30000 + travel + 80000 + 50000);
+    }
+
     // ------------------------------------------------------------------ dispatch
 
     @Test
@@ -462,6 +552,42 @@ abstract class OrderFlowContract {
         assertThat(offers).isNotEmpty();
         postJson("/api/v1/partner/offers/" + offers.get(0).path("assignmentId").asText() + "/accept", partner.token, null)
                 .andExpect(status().isOk());
+    }
+
+    /** The assignment id of the offer made for {@code orderId} (a partner can hold several open offers). */
+    String offerIdFor(JsonNode offers, String orderId) {
+        for (var offer : offers) {
+            if (orderId.equals(offer.path("orderId").asText())) return offer.path("assignmentId").asText();
+        }
+        throw new AssertionError("No offer for order " + orderId + " in " + offers);
+    }
+
+    String orderStatus(Session customer, String orderId) throws Exception {
+        return read(mvc.perform(get("/api/v1/orders/" + orderId).header("Authorization", "Bearer " + customer.token))
+                .andExpect(status().isOk()).andReturn()).path("status").asText();
+    }
+
+    String availabilityOf(Session partner) {
+        return jdbc.queryForObject("select availability from fixgo_test.partner_profiles where user_id = ?::uuid",
+                String.class, partner.userId);
+    }
+
+    ResultActions presence(Session partner, String availability, double[] loc) throws Exception {
+        return mvc.perform(patch("/api/v1/partner/me/presence").header("Authorization", "Bearer " + partner.token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(json.writeValueAsString(Map.of("availability", availability, "lat", loc[0], "lng", loc[1]))));
+    }
+
+    /** Accepted order → arrive → check → quote → approve → complete (cash collected). */
+    void driveToCompletion(String orderId, Session customer, Session partner) throws Exception {
+        postJson("/api/v1/orders/" + orderId + "/arrive", partner.token, null).andExpect(status().isOk());
+        postJson("/api/v1/orders/" + orderId + "/check", partner.token, null).andExpect(status().isOk());
+        var quote = read(postJson("/api/v1/orders/" + orderId + "/quotes", partner.token, Map.of("items", List.of(
+                Map.of("itemType", "LABOR", "description", "Vá xe", "quantity", 1, "unitPrice", 50000))))
+                .andExpect(status().isCreated()).andReturn());
+        postJson("/api/v1/orders/" + orderId + "/quotes/" + quote.path("id").asText() + "/approve", customer.token, null)
+                .andExpect(status().isOk());
+        postJson("/api/v1/orders/" + orderId + "/complete", partner.token, null).andExpect(status().isOk());
     }
 
     ResultActions postJson(String path, String token, Object body) throws Exception {

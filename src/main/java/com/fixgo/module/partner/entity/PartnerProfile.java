@@ -80,6 +80,12 @@ public class PartnerProfile {
             this.locationUpdatedAt = now;
         }
     }
+    /** Position only: availability is left alone (accepting an order must not flip a partner back to ONLINE). */
+    public void updateLocation(double lat, double lng, Instant now) {
+        this.currentLat = lat;
+        this.currentLng = lng;
+        this.locationUpdatedAt = now;
+    }
     public void setAvailability(Availability availability) { this.availability = availability; }
 
     public UUID getUserId() { return userId; }

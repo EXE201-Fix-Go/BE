@@ -8,6 +8,7 @@ import com.fixgo.module.partner.service.*;
 import com.fixgo.module.catalog.entity.ServiceCatalog;
 
 import com.fixgo.module.catalog.service.ServiceCatalogCache;
+import com.fixgo.module.dispatch.repository.OrderAssignmentRepository;
 import com.fixgo.shared.util.Actor;
 import com.fixgo.shared.exception.ApiException;
 import com.fixgo.shared.util.PhoneNumbers;
@@ -28,17 +29,20 @@ public class PartnerProfileService {
     private final PartnerProfileRepository profiles;
     private final PartnerDocumentRepository documents;
     private final PartnerServiceOfferRepository offers;
+    private final OrderAssignmentRepository assignments;
     private final ServiceCatalogCache catalog;
     private final UserRepository users;
     private final UserIdentityRepository identities;
     private final Clock clock;
 
     public PartnerProfileService(PartnerProfileRepository profiles, PartnerDocumentRepository documents,
-                                 PartnerServiceOfferRepository offers, ServiceCatalogCache catalog,
-                                 UserRepository users, UserIdentityRepository identities, Clock clock) {
+                                 PartnerServiceOfferRepository offers, OrderAssignmentRepository assignments,
+                                 ServiceCatalogCache catalog, UserRepository users, UserIdentityRepository identities,
+                                 Clock clock) {
         this.profiles = profiles;
         this.documents = documents;
         this.offers = offers;
+        this.assignments = assignments;
         this.catalog = catalog;
         this.users = users;
         this.identities = identities;
@@ -81,6 +85,12 @@ public class PartnerProfileService {
         if (request.availability() == Availability.ONLINE && !profile.canTakeOrders()) {
             throw new ApiException(HttpStatus.FORBIDDEN, "PARTNER_NOT_VERIFIED",
                     "Your profile must be approved before going online.");
+        }
+        // While an order is open the partner stays BUSY: going ONLINE would offer them a second job and going
+        // OFFLINE would abandon the customer. Re-sending the current state (e.g. a location ping) is still fine.
+        if (request.availability() != profile.getAvailability() && assignments.hasActiveJob(actor.userId())) {
+            throw new ApiException(HttpStatus.CONFLICT, "PARTNER_HAS_ACTIVE_JOB",
+                    "Finish or cancel your current order before changing your availability.");
         }
         profile.updatePresence(request.availability(), request.lat(), request.lng(), clock.instant());
         return toResponse(profile, users.findById(actor.userId()).orElseThrow(UserService::notFound));

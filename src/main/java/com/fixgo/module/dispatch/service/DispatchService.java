@@ -171,12 +171,18 @@ public class DispatchService {
             throw new ApiException(HttpStatus.CONFLICT, "OFFER_CLOSED", "This offer has expired or was withdrawn.");
         }
         var profile = partners.lockById(partner.userId()).orElseThrow(DispatchService::offerNotFound);
-        // Mốc tính phí di chuyển = vị trí GPS thợ ngay lúc bấm nhận (nếu app gửi lên), thay cho vị trí lúc online.
-        if (req != null && req.lat() != null && req.lng() != null) {
-            profile.updatePresence(Availability.ONLINE, req.lat(), req.lng(), now);
-        }
         if (!profile.canTakeOrders()) {                                  // RB-16 re-check inside the transaction
             throw new ApiException(HttpStatus.FORBIDDEN, "PARTNER_NOT_ELIGIBLE", "Your profile cannot take orders.");
+        }
+        // One order at a time. The profile row is locked above, so two accepts by the same partner serialise here
+        // and the second one sees the first one's assignment.
+        if (assignments.hasActiveJob(partner.userId())) {
+            throw new ApiException(HttpStatus.CONFLICT, "PARTNER_BUSY", "Finish your current order before taking another.");
+        }
+        // Mốc tính phí di chuyển = vị trí GPS thợ ngay lúc bấm nhận (nếu app gửi lên), thay cho vị trí lúc online.
+        // Chỉ ghi vị trí: trạng thái sẵn sàng do luồng nhận đơn quyết định (BUSY bên dưới).
+        if (req != null && req.lat() != null && req.lng() != null) {
+            profile.updateLocation(req.lat(), req.lng(), now);
         }
         int claimed = orders.compareAndSetStatus(assignment.getOrderId(), OrderStatus.REQUESTED, OrderStatus.ASSIGNED);
         if (claimed == 0) {
