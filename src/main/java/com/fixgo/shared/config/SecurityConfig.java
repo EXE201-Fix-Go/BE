@@ -77,7 +77,7 @@ public class SecurityConfig {
                                 "/api/v1/auth/refresh").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v1/services", "/api/v1/pricing", "/uploads/**", "/api/v1/ping").permitAll()
                         .requestMatchers(HttpMethod.HEAD, "/api/v1/ping").permitAll()
-                        .requestMatchers(HttpMethod.POST, "/api/v1/uploads").authenticated()
+                        .requestMatchers(HttpMethod.POST, "/api/v1/uploads", "/api/v1/uploads/kyc").authenticated()
                         .requestMatchers("/api/v1/admin/**").hasRole("ADMIN")
                         .requestMatchers("/api/v1/partner/**").hasRole("PARTNER")
                         .requestMatchers("/api/v1/orders/**", "/api/v1/users/me", "/api/v1/users/me/**",

@@ -33,12 +33,13 @@ public class PartnerProfileService {
     private final ServiceCatalogCache catalog;
     private final UserRepository users;
     private final UserIdentityRepository identities;
+    private final KycDocumentPolicy kyc;
     private final Clock clock;
 
     public PartnerProfileService(PartnerProfileRepository profiles, PartnerDocumentRepository documents,
                                  PartnerServiceOfferRepository offers, OrderAssignmentRepository assignments,
                                  ServiceCatalogCache catalog, UserRepository users, UserIdentityRepository identities,
-                                 Clock clock) {
+                                 KycDocumentPolicy kyc, Clock clock) {
         this.profiles = profiles;
         this.documents = documents;
         this.offers = offers;
@@ -46,6 +47,7 @@ public class PartnerProfileService {
         this.catalog = catalog;
         this.users = users;
         this.identities = identities;
+        this.kyc = kyc;
         this.clock = clock;
     }
 
@@ -60,6 +62,7 @@ public class PartnerProfileService {
         if (profiles.existsById(actor.userId())) {
             throw new ApiException(HttpStatus.CONFLICT, "ALREADY_PARTNER", "This account is already a partner.");
         }
+        kyc.requireOwnUploads(actor.userId(), request.documents());
         var now = clock.instant();
         var user = users.lockById(actor.userId()).orElseThrow(UserService::notFound);
         user.rename(request.fullName());
@@ -116,6 +119,7 @@ public class PartnerProfileService {
             throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_REQUEST", "Choose APPROVED or REJECTED.");
         }
         var profile = profiles.lockById(partnerId).orElseThrow(PartnerProfileService::notPartner);
+        if (status == VerificationStatus.APPROVED) kyc.requireCompleteSet(documents.findByPartnerIdOrderByCreatedAtAsc(partnerId));
         var now = clock.instant();
         profile.verify(status, admin.userId(), now);
         documents.findByPartnerIdOrderByCreatedAtAsc(partnerId).forEach(d -> d.review(status.name(), admin.userId(), now));

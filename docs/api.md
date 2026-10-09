@@ -104,6 +104,29 @@ Gửi lỗi (khóa sai `101`, brandname lạ `104`, mẫu chưa đăng ký `146`
 không lộ thông tin nhà cung cấp; chi tiết nằm trong log (`sms.esms ...`, chỉ hiện 4 số cuối). Profile `prod` từ chối khởi động nếu
 `SMS_PROVIDER` vẫn là `log`. SpeedSMS chưa được hỗ trợ (tài liệu công khai của họ chưa đủ rõ để viết adapter an toàn).
 
+## Ảnh và giấy tờ KYC (Supabase Storage)
+`STORAGE_PROVIDER=local` (mặc định) lưu trên đĩa máy — chỉ để dev. `STORAGE_PROVIDER=supabase` dùng Supabase Storage; **profile `prod`
+từ chối khởi động nếu vẫn là `local`** (đĩa Render bị xóa sau mỗi lần deploy).
+
+| Biến | Ý nghĩa |
+|---|---|
+| `SUPABASE_URL` | `https://<project-ref>.supabase.co` |
+| `SUPABASE_SERVICE_KEY` | service-role key của project. **Chỉ đặt ở biến môi trường server**, không bao giờ đưa vào FE/Mobile hay commit |
+| `SUPABASE_PUBLIC_BUCKET` / `SUPABASE_PRIVATE_BUCKET` | mặc định `fixgo-public` (ảnh hiện trường, công khai) và `fixgo-kyc` (giấy tờ, riêng tư); backend tự tạo bucket ở lần upload đầu |
+
+| Endpoint | Ai | Ghi chú |
+|---|---|---|
+| `POST /uploads` (multipart `file`) | đã đăng nhập | ảnh hiện trường → `{url}` công khai để đưa vào `photoUrls` |
+| `POST /uploads/kyc` (multipart `file`) | đã đăng nhập | giấy tờ → `{storageKey}` (`kyc/{userId}/{uuid}.jpg`), lưu bucket riêng tư |
+| `POST /partner-registration` | khách | `documents` phải đủ `ID_FRONT`, `ID_BACK`, `SELFIE`, mỗi `storageKey` là file **chính người đó** đã upload (400 `INVALID_DOCUMENT` / `KYC_DOCUMENTS_MISSING`) |
+| `GET /admin/partners/{id}/documents` | admin | danh sách giấy tờ + `fileAvailable` |
+| `GET /admin/partners/{id}/documents/{docId}/content` | admin | tải ảnh (backend stream, `Cache-Control: no-store`); log `kyc.document.viewed` |
+| `POST /admin/partners/{id}/verify` `APPROVED` | admin | 409 `KYC_DOCUMENTS_MISSING` nếu thiếu giấy tờ hoặc file không còn |
+
+File được nhận dạng theo **nội dung** (JPEG/PNG/WebP/HEIC), không tin `Content-Type` client gửi; HTML/SVG đội lốt ảnh bị từ chối (400 `UNSUPPORTED_FILE`).
+Hồ sơ đăng ký trước Phase này dùng khóa giả (`kyc/front.jpg`): admin thấy `fileAvailable=false` và không thể duyệt cho tới khi có giấy tờ thật.
+Chưa có API nộp lại giấy tờ sau khi bị từ chối (cần làm thêm).
+
 ## Trạng thái đơn (ERD §7.1 — 14 giá trị)
 `PENDING_CONFIRMATION → REQUESTED → ASSIGNED → ARRIVED → CHECKING → WAITING_FOR_APPROVAL → APPROVED → IN_PROGRESS → COMPLETED`
 + `ADDITIONAL_QUOTE`, `PAUSED`, `CANCELLED`, `NO_PARTNER_FOUND`, `EXPIRED`. Chuyển trạng thái sai → 409 `INVALID_STATUS_TRANSITION`.

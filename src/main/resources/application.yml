@@ -81,6 +81,16 @@ fixgo:
   catalog:
     # Comma-separated service codes hidden from customers and partners. Towing waits for the hand-over flow (BR04/BR05).
     disabled-codes: ${DISABLED_SERVICE_CODES:towing}
+  storage:
+    # local = this machine's disk (development only) | supabase = Supabase Storage (needs SUPABASE_URL + SUPABASE_SERVICE_KEY).
+    provider: ${STORAGE_PROVIDER:local}
+    private-dir: ${PRIVATE_UPLOADS_DIR:.local/private-uploads}
+    supabase:
+      url: ${SUPABASE_URL:}
+      service-key: ${SUPABASE_SERVICE_KEY:}
+      public-bucket: ${SUPABASE_PUBLIC_BUCKET:fixgo-public}
+      private-bucket: ${SUPABASE_PRIVATE_BUCKET:fixgo-kyc}
+      timeout: ${SUPABASE_TIMEOUT:10s}
   uploads:
     # Pilot: local disk (git-ignored). Production: Cloudinary (BRD §8).
     dir: ${UPLOADS_DIR:.local/uploads}
