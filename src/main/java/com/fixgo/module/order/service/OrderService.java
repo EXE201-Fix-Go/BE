@@ -42,6 +42,7 @@ import java.util.stream.Collectors;
  */
 @Service
 public class OrderService {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(OrderService.class);
     private final RescueOrderRepository orders;
     private final OrderStatusHistoryRepository history;
     private final OrderAssignmentRepository assignments;
@@ -135,8 +136,36 @@ public class OrderService {
             case ADMIN -> true;
         };
         if (!allowed) throw notFoundOrForbidden(actor, order);
+        // A partner backing out before arriving does not cancel the customer's rescue: the order goes back out.
+        if (actor.is(Role.PARTNER) && order.getStatus() == OrderStatus.ASSIGNED) {
+            withdrawLocked(order, actor, reason);
+            return toResponse(order).withoutCustomerContact();
+        }
         cancelLocked(order, actor, reason);
         return viewFor(actor, order);
+    }
+
+    /**
+     * The partner who accepted gives the order up before arriving. The customer keeps their request: the order
+     * returns to REQUESTED and is dispatched again, never back to this partner. The assignment is closed as
+     * DECLINED (reason WITHDRAWN) so the partner loses all access to the order and its contact details (S1).
+     */
+    @Transactional
+    public void withdraw(Actor actor, UUID orderId, String reason) {
+        var order = lockAssigned(actor, orderId);
+        withdrawLocked(order, actor, reason);
+    }
+
+    private void withdrawLocked(RescueOrder order, Actor actor, String reason) {
+        if (order.getStatus() != OrderStatus.ASSIGNED) throw OrderStateMachine.wrongState(order.getStatus(), "withdraw from");
+        var now = clock.instant();
+        var assignment = dispatch.currentAssignment(order.getId()).orElseThrow(OrderService::forbidden);
+        assignment.decline("WITHDRAWN" + (reason == null || reason.isBlank() ? "" : ": " + reason), now);
+        partners.lockById(actor.userId()).ifPresent(p -> p.setAvailability(Availability.ONLINE));
+        order.recordTravel(null, null, null);        // the fee belonged to the partner who left
+        stateMachine.transition(order, OrderStatus.REQUESTED, actor.userId(), ActorType.PARTNER, "Partner withdrew");
+        log.info("order.withdrawn code={} partnerId={}", order.getOrderCode(), actor.userId());
+        dispatch.redispatch(order);
     }
 
     /** Shared with quote decline (GW-02). Caller holds the order lock. */

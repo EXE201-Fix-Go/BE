@@ -30,7 +30,7 @@ public enum OrderStatus {
     private static final Map<OrderStatus, Set<OrderStatus>> TRANSITIONS = Map.ofEntries(
             Map.entry(PENDING_CONFIRMATION, EnumSet.of(REQUESTED, CANCELLED, EXPIRED)),
             Map.entry(REQUESTED, EnumSet.of(ASSIGNED, CANCELLED, NO_PARTNER_FOUND)),
-            Map.entry(ASSIGNED, EnumSet.of(ARRIVED, CANCELLED)),
+            Map.entry(ASSIGNED, EnumSet.of(ARRIVED, REQUESTED, CANCELLED)),     // REQUESTED: the partner withdrew, order is re-dispatched
             Map.entry(ARRIVED, EnumSet.of(CHECKING, CANCELLED)),
             Map.entry(CHECKING, EnumSet.of(WAITING_FOR_APPROVAL, CANCELLED)),
             Map.entry(WAITING_FOR_APPROVAL, EnumSet.of(APPROVED, CANCELLED)),
