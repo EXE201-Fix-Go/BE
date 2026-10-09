@@ -21,27 +21,35 @@ class ProductionSafetyCheckTest {
     }
 
     private static final String STRONG = "0123456789abcdef0123456789abcdef";
+    private static final SmsProperties SMS = new SmsProperties("esms", null);
+    private static final SmsProperties LOG_ONLY = new SmsProperties("log", null);
 
     @Test
     void productionRefusesToEchoOtpCodes() {
-        assertThatThrownBy(() -> new ProductionSafetyCheck(prod(), auth(true, STRONG)).verify())
+        assertThatThrownBy(() -> new ProductionSafetyCheck(prod(), auth(true, STRONG), SMS).verify())
                 .hasMessageContaining("OTP_DEV_ECHO");
     }
 
     @Test
     void productionRefusesAShortJwtSecret() {
-        assertThatThrownBy(() -> new ProductionSafetyCheck(prod(), auth(false, "short")).verify())
+        assertThatThrownBy(() -> new ProductionSafetyCheck(prod(), auth(false, "short"), SMS).verify())
                 .hasMessageContaining("JWT_SECRET");
     }
 
     @Test
+    void productionRefusesToRunWithoutARealSmsProvider() {
+        assertThatThrownBy(() -> new ProductionSafetyCheck(prod(), auth(false, STRONG), LOG_ONLY).verify())
+                .hasMessageContaining("SMS_PROVIDER");
+    }
+
+    @Test
     void productionStartsWithSafeSettings() {
-        assertThatCode(() -> new ProductionSafetyCheck(prod(), auth(false, STRONG)).verify()).doesNotThrowAnyException();
+        assertThatCode(() -> new ProductionSafetyCheck(prod(), auth(false, STRONG), SMS).verify()).doesNotThrowAnyException();
     }
 
     @Test
     void developerMachinesMayEchoCodes() {
-        assertThatCode(() -> new ProductionSafetyCheck(new MockEnvironment(), auth(true, "dev")).verify())
+        assertThatCode(() -> new ProductionSafetyCheck(new MockEnvironment(), auth(true, "dev"), LOG_ONLY).verify())
                 .doesNotThrowAnyException();
     }
 }

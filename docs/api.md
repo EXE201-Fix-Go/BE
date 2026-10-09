@@ -85,6 +85,25 @@ Chủ tiệm chỉ **mời**, tài khoản người được mời không bị �
 
 Lời mời của người khác trả 404 (không lộ tồn tại). Migration `V7__shop_invitations.sql`.
 
+## Gửi OTP qua SMS (eSMS.vn)
+`SMS_PROVIDER=log` (mặc định) chỉ ghi log — dùng khi chạy local cùng `OTP_DEV_ECHO=true`. `SMS_PROVIDER=esms` gửi qua eSMS.vn
+(`POST .../SendMultipleMessage_V4_post_json/`, tin chăm sóc khách hàng `SmsType=2`, thành công khi `CodeResult=100`).
+
+| Biến | Ý nghĩa |
+|---|---|
+| `ESMS_API_KEY`, `ESMS_SECRET_KEY` | khóa tài khoản eSMS (chỉ đặt trong biến môi trường của Render, không commit) |
+| `ESMS_BRANDNAME` | brandname đã đăng ký với eSMS (bắt buộc với `SmsType=2`) |
+| `ESMS_CONTENT_TEMPLATE` | nội dung tin, có `{code}` và `{minutes}`. **Phải trùng đúng mẫu đã đăng ký với eSMS**, nếu không eSMS trả `146` |
+| `ESMS_SANDBOX=true` | eSMS chỉ kiểm tra request, không gửi và không tính tiền — dùng để thử khóa trước khi chạy thật |
+| `ESMS_SMS_TYPE`, `ESMS_URL`, `ESMS_TIMEOUT` | mặc định `2`, URL của eSMS, `5s` |
+
+Mẫu tin mặc định (không dấu, 1 tin, cần đăng ký trước với eSMS):
+`{code} la ma xac thuc Fix&Go cua ban, co hieu luc {minutes} phut. Tuyet doi khong chia se ma nay voi bat ky ai.`
+
+Gửi lỗi (khóa sai `101`, brandname lạ `104`, mẫu chưa đăng ký `146`, cổng lỗi/timeout) → 502 `OTP_DELIVERY_FAILED`, không trả `devCode`,
+không lộ thông tin nhà cung cấp; chi tiết nằm trong log (`sms.esms ...`, chỉ hiện 4 số cuối). Profile `prod` từ chối khởi động nếu
+`SMS_PROVIDER` vẫn là `log`. SpeedSMS chưa được hỗ trợ (tài liệu công khai của họ chưa đủ rõ để viết adapter an toàn).
+
 ## Trạng thái đơn (ERD §7.1 — 14 giá trị)
 `PENDING_CONFIRMATION → REQUESTED → ASSIGNED → ARRIVED → CHECKING → WAITING_FOR_APPROVAL → APPROVED → IN_PROGRESS → COMPLETED`
 + `ADDITIONAL_QUOTE`, `PAUSED`, `CANCELLED`, `NO_PARTNER_FOUND`, `EXPIRED`. Chuyển trạng thái sai → 409 `INVALID_STATUS_TRANSITION`.

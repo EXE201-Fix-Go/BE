@@ -10,10 +10,12 @@ import org.springframework.stereotype.Component;
 public class ProductionSafetyCheck {
     private final Environment environment;
     private final AuthProperties auth;
+    private final SmsProperties sms;
 
-    public ProductionSafetyCheck(Environment environment, AuthProperties auth) {
+    public ProductionSafetyCheck(Environment environment, AuthProperties auth, SmsProperties sms) {
         this.environment = environment;
         this.auth = auth;
+        this.sms = sms;
     }
 
     @PostConstruct
@@ -22,6 +24,9 @@ public class ProductionSafetyCheck {
         if (auth.otpDevEcho()) {
             throw new IllegalStateException(
                     "OTP_DEV_ECHO must be false in production: it returns every login code in the API response.");
+        }
+        if (sms.isLogOnly()) {
+            throw new IllegalStateException("SMS_PROVIDER must be set in production: with 'log' nobody receives a login code.");
         }
         if (auth.jwtSecret() == null || auth.jwtSecret().length() < 32) {
             throw new IllegalStateException("JWT_SECRET must be at least 32 characters in production.");

@@ -66,6 +66,18 @@ fixgo:
     # Ignore partners whose last position is older than this (e.g. PT10M). 0s = no limit; turn it on once the
     # partner apps send their position periodically, otherwise idle-but-online partners stop matching.
     location-max-age: ${DISPATCH_LOCATION_MAX_AGE:0s}
+  sms:
+    # log = only log the delivery attempt (local dev, with OTP_DEV_ECHO) | esms = eSMS.vn REST API (docs/api.md).
+    provider: ${SMS_PROVIDER:log}
+    esms:
+      url: ${ESMS_URL:}
+      api-key: ${ESMS_API_KEY:}
+      secret-key: ${ESMS_SECRET_KEY:}
+      brandname: ${ESMS_BRANDNAME:}
+      sms-type: ${ESMS_SMS_TYPE:2}
+      sandbox: ${ESMS_SANDBOX:false}
+      content-template: ${ESMS_CONTENT_TEMPLATE:}
+      timeout: ${ESMS_TIMEOUT:5s}
   catalog:
     # Comma-separated service codes hidden from customers and partners. Towing waits for the hand-over flow (BR04/BR05).
     disabled-codes: ${DISABLED_SERVICE_CODES:towing}
