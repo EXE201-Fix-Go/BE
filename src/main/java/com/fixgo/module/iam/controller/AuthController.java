@@ -6,6 +6,8 @@ import com.fixgo.module.iam.repository.*;
 import com.fixgo.module.iam.service.*;
 
 
+import com.fixgo.shared.config.AuthProperties;
+import com.fixgo.shared.util.ClientIp;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
@@ -18,13 +20,17 @@ import java.util.UUID;
 @RequestMapping("/api/v1/auth")
 public class AuthController {
     private final AuthService service;
+    private final AuthProperties properties;
 
-    public AuthController(AuthService service) { this.service = service; }
+    public AuthController(AuthService service, AuthProperties properties) {
+        this.service = service;
+        this.properties = properties;
+    }
 
     @PostMapping("/otp")
     public AuthDtos.OtpRequestResult requestOtp(@Valid @RequestBody AuthDtos.OtpRequest request,
                                                 HttpServletRequest http) {
-        return service.requestOtp(request.phone(), clientIp(http));
+        return service.requestOtp(request.phone(), ClientIp.resolve(http, properties.trustedProxyHops()));
     }
 
     @PostMapping("/otp/verify")
@@ -47,11 +53,5 @@ public class AuthController {
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void logoutAll(@AuthenticationPrincipal Jwt jwt) {
         service.logoutAll(UUID.fromString(jwt.getSubject()));
-    }
-
-    private static String clientIp(HttpServletRequest request) {
-        String forwarded = request.getHeader("X-Forwarded-For");
-        if (forwarded != null && !forwarded.isBlank()) return forwarded.split(",")[0].strip();
-        return request.getRemoteAddr();
     }
 }

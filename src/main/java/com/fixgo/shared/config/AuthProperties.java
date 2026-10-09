@@ -13,8 +13,9 @@ public record AuthProperties(@NotBlank String issuer, @NotBlank String audience,
                              @NotNull Duration accessTokenTtl, @NotNull Duration refreshTokenTtl,
                              @NotNull Duration otpTtl, @Min(1) int otpMaxAttempts,
                              @Min(1) int otpMaxPerTargetPerHour, @Min(1) int otpMaxPerIpPerHour,
-                             boolean otpDevEcho) {
+                             boolean otpDevEcho, int trustedProxyHops) {
     public AuthProperties {
+        if (trustedProxyHops < 0) throw new IllegalArgumentException("trusted-proxy-hops cannot be negative.");
         if (accessTokenTtl != null && accessTokenTtl.toSeconds() < 1) {
             throw new IllegalArgumentException("Access token TTL must be at least one second.");
         }
