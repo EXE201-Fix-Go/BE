@@ -14,7 +14,9 @@ cho mọi endpoint trừ OTP/refresh và `GET /services`. Field lạ trong body 
 
 `role` là mã app-level FE điều hướng: `CUSTOMER | P_IND | P_SHOP | P_STAFF | ADMIN`
 (ERD lưu `app_users.role` + `partner_profiles.partner_type`, backend map ở tầng API).
-Số điện thoại lần đầu → tài khoản `CUSTOMER`. OTP: 6 số, 5 phút, 5 lần thử, dùng một lần (RB-03), giới hạn theo số & IP (RB-04).
+Số điện thoại lần đầu → tài khoản `CUSTOMER`.
+Giới hạn theo IP dùng `X-Forwarded-For` chỉ khi đặt `TRUSTED_PROXY_HOPS` (số proxy của mình đứng trước app; lấy mục thứ N từ bên phải, không bao giờ lấy mục đầu do client gửi). Mặc định 0 = bỏ qua header.
+Profile `prod` từ chối khởi động nếu `OTP_DEV_ECHO=true` hoặc `JWT_SECRET` ngắn hơn 32 ký tự. OTP: 6 số, 5 phút, 5 lần thử, dùng một lần (RB-03), giới hạn theo số & IP (RB-04).
 
 ## Người dùng
 - `GET /users/me` trả về `fullName`, số điện thoại, `email`, `dateOfBirth` (ISO `yyyy-MM-dd`) và `avatarUrl`.
@@ -53,6 +55,15 @@ Số điện thoại lần đầu → tài khoản `CUSTOMER`. OTP: 6 số, 5 ph
 
 Vòng điều phối (`dispatch_policies`, BR08): 2 km/60 s → 4 km/75 s → 7 km/90 s (vòng cuối). Hết vòng cuối không ai nhận → `NO_PARTNER_FOUND` (RB-34). Đơn `PENDING_CONFIRMATION` quá 10 phút → `EXPIRED`.
 
+## Quyền riêng tư (AUTHZ S1)
+SĐT và vị trí chỉ chia sẻ khi đơn còn mở. Khi đơn `COMPLETED`/`CANCELLED`: khách thấy `partner.phone/lat/lng = null` (vẫn có tên thợ); thợ thấy `contactPhone/lat/lng = null`. ADMIN không bị ẩn.
+
+## Báo giá hết hạn (S12)
+Nếu thợ đặt `validMinutes`, duyệt/từ chối sau hạn → 409 `QUOTE_EXPIRED`. Thợ gửi lại báo giá mới được (bản hết hạn chuyển `EXPIRED`, đơn giữ nguyên trạng thái chờ duyệt).
+
+## Dịch vụ tắt theo cấu hình
+`DISABLED_SERVICE_CODES` (mặc định `towing`) ẩn dịch vụ khỏi `GET /services` và từ chối tạo đơn/đăng ký dịch vụ đó (`UNKNOWN_SERVICE`).
+
 ## Trạng thái đơn (ERD §7.1 — 14 giá trị)
 `PENDING_CONFIRMATION → REQUESTED → ASSIGNED → ARRIVED → CHECKING → WAITING_FOR_APPROVAL → APPROVED → IN_PROGRESS → COMPLETED`
 + `ADDITIONAL_QUOTE`, `PAUSED`, `CANCELLED`, `NO_PARTNER_FOUND`, `EXPIRED`. Chuyển trạng thái sai → 409 `INVALID_STATUS_TRANSITION`.
@@ -63,4 +74,4 @@ Không còn dữ liệu mẫu: tài khoản đăng nhập bằng OTP (xem `devCo
 ## Lỗi
 `{timestamp, status, code, message, path, fieldErrors}`. Mã hay gặp: `INVALID_OTP`, `OTP_RATE_LIMITED`, `INVALID_REFRESH_TOKEN`,
 `ACCOUNT_LOCKED`, `FORBIDDEN`, `ORDER_NOT_FOUND` (không lộ đơn người khác), `INVALID_STATUS_TRANSITION`,
-`ORDER_ALREADY_TAKEN`, `OFFER_CLOSED`, `QUOTE_ALREADY_SENT`, `QUOTE_NOT_APPROVED`, `PARTNER_NOT_VERIFIED`.
+`ORDER_ALREADY_TAKEN`, `OFFER_CLOSED`, `QUOTE_ALREADY_SENT`, `QUOTE_EXPIRED`, `QUOTE_NOT_APPROVED`, `PARTNER_NOT_VERIFIED`.
