@@ -21,12 +21,15 @@ public class PartnerController {
     private final PartnerProfileService service;
     private final PartnerStatsService stats;
     private final com.fixgo.module.dispatch.service.DispatchService dispatch;
+    private final com.fixgo.module.partner.service.ShopInvitationService invitations;
 
     public PartnerController(PartnerProfileService service, PartnerStatsService stats,
-                             com.fixgo.module.dispatch.service.DispatchService dispatch) {
+                             com.fixgo.module.dispatch.service.DispatchService dispatch,
+                             com.fixgo.module.partner.service.ShopInvitationService invitations) {
         this.service = service;
         this.stats = stats;
         this.dispatch = dispatch;
+        this.invitations = invitations;
     }
 
     @GetMapping("/dashboard")
@@ -54,6 +57,9 @@ public class PartnerController {
     @PostMapping("/shop/staff")
     @ResponseStatus(HttpStatus.CREATED)
     public List<PartnerDtos.StaffResponse> invite(Authentication auth, @Valid @RequestBody PartnerDtos.InviteStaffRequest request) {
-        return service.inviteStaff(Actor.of(auth), request);
+        // Creates a pending invitation only: the invitee's account is untouched until they accept. The staff list is
+        // returned as before so existing clients keep working; pending ones are at GET /partner/shop/invitations.
+        invitations.invite(Actor.of(auth), request);
+        return service.listStaff(Actor.of(auth));
     }
 }

@@ -96,37 +96,6 @@ public class PartnerProfileService {
         return toResponse(profile, users.findById(actor.userId()).orElseThrow(UserService::notFound));
     }
 
-    /** Shop owner adds a mechanic. Creates the account + PHONE identity if needed; the mechanic logs in via OTP. */
-    @Transactional
-    public List<PartnerDtos.StaffResponse> inviteStaff(Actor actor, PartnerDtos.InviteStaffRequest request) {
-        var shop = profiles.findById(actor.userId()).orElseThrow(PartnerProfileService::notPartner);
-        if (shop.getPartnerType() != PartnerType.SHOP) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "SHOP_OWNER_ONLY", "Only a shop owner can add staff.");
-        }
-        var now = clock.instant();
-        String phone = PhoneNumbers.toE164(request.phone());
-        var identity = identities.findByProviderAndProviderUid(IdentityProvider.PHONE, phone).orElse(null);
-        User staffUser;
-        if (identity == null) {
-            staffUser = users.save(new User(Role.PARTNER, request.fullName(), now));
-            identities.save(new UserIdentity(staffUser, IdentityProvider.PHONE, phone, true, now, null));
-        } else {
-            staffUser = users.lockById(identity.getUser().getId()).orElseThrow(UserService::notFound);
-            if (profiles.existsById(staffUser.getId())) {
-                throw new ApiException(HttpStatus.CONFLICT, "ALREADY_PARTNER", "This phone already belongs to a partner.");
-            }
-            if (staffUser.getRole() == Role.ADMIN) throw forbidden();
-            staffUser.changeRole(Role.PARTNER);
-            if (staffUser.getFullName() == null) staffUser.rename(request.fullName());
-        }
-        var staff = profiles.save(new PartnerProfile(staffUser.getId(), PartnerType.SHOP_STAFF, shop.getUserId(), null));
-        // Staff inherit the shop's service list until they manage their own.
-        replaceServices(staff.getUserId(), offers.findByPartnerId(shop.getUserId()).stream()
-                .map(o -> catalog.byId(o.getServiceId()).map(ServiceCatalog::getCode).orElse(null))
-                .filter(c -> c != null).toList());
-        return listStaff(actor);
-    }
-
     @Transactional(readOnly = true)
     public List<PartnerDtos.StaffResponse> listStaff(Actor actor) {
         var shop = profiles.findById(actor.userId()).orElseThrow(PartnerProfileService::notPartner);

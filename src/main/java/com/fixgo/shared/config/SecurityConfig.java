@@ -81,7 +81,7 @@ public class SecurityConfig {
                         .requestMatchers("/api/v1/admin/**").hasRole("ADMIN")
                         .requestMatchers("/api/v1/partner/**").hasRole("PARTNER")
                         .requestMatchers("/api/v1/orders/**", "/api/v1/users/me", "/api/v1/users/me/**",
-                                "/api/v1/partner-registration", "/api/v1/auth/logout", "/api/v1/auth/logout-all")
+                                "/api/v1/partner-registration", "/api/v1/invitations/**", "/api/v1/auth/logout", "/api/v1/auth/logout-all")
                             .authenticated()
                         .anyRequest().denyAll())
                 .exceptionHandling(handler -> handler.authenticationEntryPoint(errors).accessDeniedHandler(errors))
