@@ -73,10 +73,25 @@ public interface OrderAssignmentRepository extends JpaRepository<OrderAssignment
             @Param("openStatuses") Collection<OrderStatus> openStatuses
     );
 
+    @Query("""
+        select count(a) from OrderAssignment a, RescueOrder o
+        where a.partnerId = :partnerId and a.status = :status and o.id = a.orderId and o.status in :openStatuses
+        """)
+    long countJobsInStatuses(
+            @Param("partnerId") UUID partnerId,
+            @Param("status") OrderAssignment.Status status,
+            @Param("openStatuses") Collection<OrderStatus> openStatuses
+    );
+
     /** A partner works one order at a time: true while any accepted order is still open. */
     default boolean hasActiveJob(UUID partnerId) {
+        return activeJobCount(partnerId) > 0;
+    }
+
+    /** How many accepted orders of this partner have not reached a terminal state (0 or 1 in normal operation). */
+    default long activeJobCount(UUID partnerId) {
         var open = java.util.Arrays.stream(OrderStatus.values()).filter(s -> !s.isTerminal()).toList();
-        return existsJobInStatuses(partnerId, OrderAssignment.Status.ACCEPTED, open);
+        return countJobsInStatuses(partnerId, OrderAssignment.Status.ACCEPTED, open);
     }
 
     /** One round trip: was this partner ever responsible for the order (accepted now or ended)? */

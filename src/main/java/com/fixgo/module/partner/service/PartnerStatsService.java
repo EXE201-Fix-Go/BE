@@ -47,8 +47,8 @@ public class PartnerStatsService {
         Object[] row = rating != null && rating.length == 1 && rating[0] instanceof Object[] inner ? inner : rating;
         Double avg = row == null || row[0] == null ? null : ((Number) row[0]).doubleValue();
         long count = row == null || row[1] == null ? 0 : ((Number) row[1]).longValue();
-        long active = assignments.findByPartnerIdAndStatusOrderByOfferedAtDesc(partner.userId(), OrderAssignment.Status.ACCEPTED)
-                .size();
+        // The assignment row stays ACCEPTED after completion, so the order status decides what is still open.
+        long active = assignments.activeJobCount(partner.userId());
         return new PartnerDtos.StatsResponse(completedToday, earned, completedTotal, avg, count, active);
     }
 }
