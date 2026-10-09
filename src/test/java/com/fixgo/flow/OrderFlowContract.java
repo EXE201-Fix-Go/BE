@@ -145,6 +145,7 @@ abstract class OrderFlowContract {
         assertThat(quotes.get(1).path("status").asText()).isEqualTo("APPROVED");
 
         // Complete = partner collected cash: payment CONFIRMED with the latest APPROVED total, not the sum (RB-42, RB-59).
+        assertThat(activeJobs(partner)).as("one open job while the order is in progress").isEqualTo(1);
         o = read(postJson("/api/v1/orders/" + orderId + "/complete", partner.token, null).andExpect(status().isOk()).andReturn());
         assertThat(o.path("status").asText()).isEqualTo("COMPLETED");
         assertThat(o.path("payment").path("status").asText()).isEqualTo("CONFIRMED");
@@ -154,6 +155,7 @@ abstract class OrderFlowContract {
                 .andExpect(status().isOk()).andReturn());
         assertThat(stats.path("completedToday").asLong()).isEqualTo(1);
         assertThat(stats.path("earnedToday").decimalValue().intValue()).isEqualTo(160000);
+        assertThat(stats.path("activeJobs").asLong()).as("a completed order is no longer an active job").isZero();
 
         // A single review, by the customer only.
         postJson("/api/v1/orders/" + orderId + "/review", customer.token, Map.of("rating", 5, "feedback", "Nhanh, gọn"))
@@ -239,6 +241,19 @@ abstract class OrderFlowContract {
         assertThat(o.path("payment").path("amount").decimalValue().intValue()).isEqualTo(30000);
     }
 
+    @Test
+    void travelFeeIsProRataNotAWholeKilometre() throws Exception {
+        var loc = nextLocation();
+        var customer = loginNew();
+        var partner = approvedOnlinePartner(new double[] {loc[0] + 0.004, loc[1]}, "tire-patch");   // ~450 m away
+        String orderId = confirmedOrder(customer, loc, "tire-patch");
+        acceptFirstOffer(partner);
+        var o = read(mvc.perform(get("/api/v1/orders/" + orderId).header("Authorization", "Bearer " + customer.token)).andReturn());
+        assertThat(o.path("travelDistanceKm").decimalValue()).isEqualByComparingTo("0.4");
+        assertThat(o.path("travelFee").decimalValue().intValue())
+                .as("0.4 km x 5,000/km = 2,000, not a flat 5,000 for the first kilometre").isEqualTo(2000);
+    }
+
     // ------------------------------------------------------------------ one job at a time
 
     @Test
@@ -271,8 +286,10 @@ abstract class OrderFlowContract {
         assertThat(availabilityOf(partner)).isEqualTo("BUSY");
 
         // Finishing the order frees the partner for the waiting offer.
+        assertThat(activeJobs(partner)).isEqualTo(1);
         driveToCompletion(firstOrder, first, partner);
         assertThat(availabilityOf(partner)).isEqualTo("ONLINE");
+        assertThat(activeJobs(partner)).as("finished order no longer counts").isZero();
         postJson("/api/v1/partner/offers/" + offerForSecond + "/accept", partner.token, null)
                 .andExpect(status().isOk()).andExpect(jsonPath("$.orderStatus").value("ASSIGNED"));
         // …and cancelling the second order frees them again.
@@ -565,6 +582,11 @@ abstract class OrderFlowContract {
     String orderStatus(Session customer, String orderId) throws Exception {
         return read(mvc.perform(get("/api/v1/orders/" + orderId).header("Authorization", "Bearer " + customer.token))
                 .andExpect(status().isOk()).andReturn()).path("status").asText();
+    }
+
+    long activeJobs(Session partner) throws Exception {
+        return read(mvc.perform(get("/api/v1/partner/stats").header("Authorization", "Bearer " + partner.token))
+                .andExpect(status().isOk()).andReturn()).path("activeJobs").asLong();
     }
 
     String availabilityOf(Session partner) {
