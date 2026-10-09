@@ -178,6 +178,14 @@ abstract class OrderFlowContract {
     // ------------------------------------------------------------------ cancellation policy
 
     @Test
+    void pricingIsPublicAndComesFromTheConfiguredRates() throws Exception {
+        mvc.perform(get("/api/v1/pricing")).andExpect(status().isOk())
+                .andExpect(jsonPath("$.callOutFee").value(30000))
+                .andExpect(jsonPath("$.travelPerKm").value(5000))
+                .andExpect(jsonPath("$.travelFreeKm").value(0));
+    }
+
+    @Test
     void cancellingAfterArrivalKeepsTheCallOutFeeDue() throws Exception {
         var loc = nextLocation();
         var customer = loginNew();

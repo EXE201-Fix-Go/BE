@@ -75,7 +75,7 @@ public class SecurityConfig {
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(HttpMethod.POST, "/api/v1/auth/otp", "/api/v1/auth/otp/verify",
                                 "/api/v1/auth/refresh").permitAll()
-                        .requestMatchers(HttpMethod.GET, "/api/v1/services", "/uploads/**", "/api/v1/ping").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/v1/services", "/api/v1/pricing", "/uploads/**", "/api/v1/ping").permitAll()
                         .requestMatchers(HttpMethod.HEAD, "/api/v1/ping").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/v1/uploads").authenticated()
                         .requestMatchers("/api/v1/admin/**").hasRole("ADMIN")
