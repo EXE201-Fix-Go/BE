@@ -13,6 +13,7 @@ import com.fixgo.module.dispatch.entity.DispatchPolicy;
 import com.fixgo.module.dispatch.repository.DispatchPolicyRepository;
 import com.fixgo.shared.config.DispatchProperties;
 import com.fixgo.module.pricing.repository.TravelFeeConfigRepository;
+import com.fixgo.module.pricing.service.TravelFeeCalculator;
 import com.fixgo.module.order.entity.*;
 import com.fixgo.module.order.enums.*;
 import com.fixgo.module.order.dto.*;
@@ -27,8 +28,6 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
-import java.math.BigDecimal;
-import java.math.RoundingMode;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.List;
@@ -88,6 +87,8 @@ public class DispatchService {
         var expiresAt = now.plus(Duration.ofSeconds(policy.getTimeoutSeconds()));
         var round = rounds.save(new DispatchRound(order.getId(), policy.getId(), roundNo, policy.getRadiusM(), now,
                 expiresAt, candidates.size(), candidates.isEmpty() ? noCandidateReason(order, policy) : null));
+        log.info("dispatch.round code={} round={} radiusM={} candidates={}", order.getOrderCode(), roundNo,
+                policy.getRadiusM(), candidates.size());
         if (candidates.isEmpty()) {
             round.end(DispatchRound.EndReason.NO_CANDIDATE, now);
             if (policy.isFinalRound()) {
@@ -103,6 +104,8 @@ public class DispatchService {
                         OrderAssignment.Source.BROADCAST, null, now, expiresAt))
                 .toList();
         assignments.saveAll(newAssignments);
+        log.info("dispatch.offered code={} round={} offers={} expiresAt={}", order.getOrderCode(), roundNo,
+                newAssignments.size(), expiresAt);
         // dispatch_notifications (PUSH/ZALO/SMS) are recorded here once a provider is wired up.
     }
 
@@ -187,6 +190,7 @@ public class DispatchService {
         int claimed = orders.compareAndSetStatus(assignment.getOrderId(), OrderStatus.REQUESTED, OrderStatus.ASSIGNED);
         if (claimed == 0) {
             assignment.expire(now);
+            log.info("dispatch.lost-race orderId={} partnerId={}", assignment.getOrderId(), partner.userId());
             throw new ApiException(HttpStatus.CONFLICT, "ORDER_ALREADY_TAKEN", "Another partner accepted first.");
         }
         assignment.accept(now);
@@ -200,23 +204,22 @@ public class DispatchService {
         // This replaces the old findById() that came after, eliminating one separate SELECT round-trip.
         var order = orders.lockById(assignment.getOrderId()).orElseThrow(DispatchService::offerNotFound);
         snapshotTravel(order, profile, now);
+        log.info("dispatch.accepted code={} partnerId={} travelKm={} travelFee={}", order.getOrderCode(), partner.userId(),
+                order.getTravelDistanceKm(), order.getTravelFeeSnapshot());
         stateMachine.recordExternal(order.getId(), OrderStatus.REQUESTED, OrderStatus.ASSIGNED, partner.userId(),
                 ActorType.PARTNER, "Accepted by broadcast");
         return toOffer(assignment, order);
     }
 
-    /** Snapshots straight-line km from the partner's location to the pickup and the resulting travel fee (RB-23). */
+    /** Snapshots straight-line km from the partner's location to the pickup and the resulting pro-rata travel fee (RB-23). */
     private void snapshotTravel(RescueOrder order, PartnerProfile profile, java.time.Instant now) {
         if (profile.getCurrentLat() == null || profile.getCurrentLng() == null) return;
         var cfg = travelFees.findActiveGlobal(now).orElse(null);
         if (cfg == null) return;
         double km = GeoDistance.haversineKm(profile.getCurrentLat(), profile.getCurrentLng(),
                 order.getPickupLat(), order.getPickupLng());
-        BigDecimal distanceKm = BigDecimal.valueOf(km).setScale(1, RoundingMode.HALF_UP);
-        BigDecimal billableKm = distanceKm.subtract(cfg.getFreeKm()).max(BigDecimal.ZERO)
-                .setScale(0, RoundingMode.CEILING);
-        BigDecimal fee = billableKm.multiply(cfg.getPerKmAmount()).setScale(0, RoundingMode.HALF_UP);
-        order.recordTravel(distanceKm, fee, cfg.getId());
+        var travel = TravelFeeCalculator.compute(km, cfg.getFreeKm(), cfg.getPerKmAmount());
+        order.recordTravel(travel.distanceKm(), travel.fee(), cfg.getId());
     }
 
     @Transactional
@@ -227,6 +230,7 @@ public class DispatchService {
             throw new ApiException(HttpStatus.CONFLICT, "OFFER_CLOSED", "This offer is no longer open.");
         }
         assignment.decline(reason, clock.instant());
+        log.info("dispatch.declined orderId={} partnerId={}", assignment.getOrderId(), partner.userId());
     }
 
     /**
@@ -241,6 +245,7 @@ public class DispatchService {
             if (round == null || !round.isOpen()) continue;
             var order = orders.lockById(round.getOrderId()).orElse(null);
             round.end(DispatchRound.EndReason.TIMEOUT, now);
+            log.info("dispatch.timeout orderId={} round={}", round.getOrderId(), round.getRoundNo());
             assignments.findByDispatchRoundId(round.getId()).forEach(a -> a.expire(now));
             if (order == null || order.getStatus() != OrderStatus.REQUESTED) continue;
             var policy = policies.findById(round.getPolicyId()).orElse(null);
