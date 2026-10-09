@@ -64,6 +64,11 @@ Nếu thợ đặt `validMinutes`, duyệt/từ chối sau hạn → 409 `QUOTE_
 ## Dịch vụ tắt theo cấu hình
 `DISABLED_SERVICE_CODES` (mặc định `towing`) ẩn dịch vụ khỏi `GET /services` và từ chối tạo đơn/đăng ký dịch vụ đó (`UNKNOWN_SERVICE`).
 
+## Thợ rút đơn
+`POST /orders/{id}/withdraw` (thợ đã nhận, trạng thái `ASSIGNED`, body `{reason?}`) → 204. Đơn về `REQUESTED` và được phát lại cho thợ khác; thợ đã rút không được mời lại và mất quyền xem đơn. Sau `ARRIVED` trả 409. `POST /orders/{id}/cancel` của thợ khi đơn còn `ASSIGNED` được xử lý như rút đơn (app cũ vẫn chạy).
+Admin khóa tài khoản thợ đang có đơn mở → 409 `PARTNER_HAS_ACTIVE_JOB` (hủy hoặc giao lại đơn trước).
+`DISPATCH_LOCATION_MAX_AGE` (vd `10m`; mặc định `0s` = không giới hạn): bỏ qua thợ có vị trí cũ hơn ngưỡng khi chọn thợ — chỉ bật khi app thợ gửi vị trí định kỳ qua `PATCH /partner/me/presence`.
+
 ## Trạng thái đơn (ERD §7.1 — 14 giá trị)
 `PENDING_CONFIRMATION → REQUESTED → ASSIGNED → ARRIVED → CHECKING → WAITING_FOR_APPROVAL → APPROVED → IN_PROGRESS → COMPLETED`
 + `ADDITIONAL_QUOTE`, `PAUSED`, `CANCELLED`, `NO_PARTNER_FOUND`, `EXPIRED`. Chuyển trạng thái sai → 409 `INVALID_STATUS_TRANSITION`.

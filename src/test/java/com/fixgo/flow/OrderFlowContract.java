@@ -344,6 +344,87 @@ abstract class OrderFlowContract {
                 .andExpect(status().isConflict()).andExpect(jsonPath("$.code").value("ORDER_NOT_COMPLETED"));
     }
 
+    // ------------------------------------------------------------------ partner withdraws / admin lock
+
+    @Test
+    void aPartnerWhoWithdrawsBeforeArrivingPutsTheOrderBackOut() throws Exception {
+        var loc = nextLocation();
+        var customer = loginNew();
+        var near = approvedOnlinePartner(new double[] {loc[0] + 0.004, loc[1]}, "tire-patch");   // ~0.4 km
+        var other = approvedOnlinePartner(new double[] {loc[0] + 0.009, loc[1]}, "tire-patch");  // ~1.0 km
+        String orderId = confirmedOrder(customer, loc, "tire-patch");
+        acceptOfferFor(near, orderId);
+        assertThat(getOrder(customer, orderId).path("travelFee").decimalValue().intValue()).isEqualTo(2000);
+
+        postJson("/api/v1/orders/" + orderId + "/withdraw", near.token, Map.of("reason", "Xe hỏng"))
+                .andExpect(status().isNoContent());
+
+        // The customer's request survives, with no partner and no stale travel fee.
+        var after = getOrder(customer, orderId);
+        assertThat(after.path("status").asText()).isEqualTo("REQUESTED");
+        assertThat(after.path("partner").isNull()).isTrue();
+        assertThat(after.path("travelFee").isNull()).isTrue();
+        assertThat(availabilityOf(near)).isEqualTo("ONLINE");
+        // The partner who left loses all access (S1) and is never offered the order again.
+        mvc.perform(get("/api/v1/orders/" + orderId).header("Authorization", "Bearer " + near.token)).andExpect(status().isNotFound());
+        assertThat(read(mvc.perform(get("/api/v1/partner/offers").header("Authorization", "Bearer " + near.token)).andReturn())).isEmpty();
+        // Somebody else gets a fresh round and the travel fee is recomputed for them.
+        assertThat(jdbc.queryForObject("select count(*) from fixgo_test.dispatch_rounds where order_id = ?::uuid", Integer.class, orderId))
+                .isEqualTo(2);
+        acceptOfferFor(other, orderId);
+        after = getOrder(customer, orderId);
+        assertThat(after.path("status").asText()).isEqualTo("ASSIGNED");
+        assertThat(after.path("partner").path("id").asText()).isEqualTo(other.userId);
+        assertThat(after.path("travelFee").decimalValue().intValue()).isEqualTo(5000);
+        // The history shows what happened.
+        assertThat(after.path("history").findValuesAsText("note")).contains("Partner withdrew");
+    }
+
+    @Test
+    void withdrawingWithNobodyElseAroundEndsTheOrderAsNoPartnerFound() throws Exception {
+        var loc = nextLocation();
+        var customer = loginNew();
+        var only = approvedOnlinePartner(loc, "tire-patch");
+        String orderId = confirmedOrder(customer, loc, "tire-patch");
+        acceptFirstOffer(only);
+        // The partner app's "cancel" in ASSIGNED is a withdrawal, not a cancellation of the customer's order.
+        postJson("/api/v1/orders/" + orderId + "/cancel", only.token, Map.of("reason", "Không đi được"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.contactPhone").doesNotExist());
+        assertThat(orderStatus(customer, orderId)).isEqualTo("NO_PARTNER_FOUND");
+        assertThat(read(mvc.perform(get("/api/v1/partner/offers").header("Authorization", "Bearer " + only.token)).andReturn())).isEmpty();
+    }
+
+    @Test
+    void withdrawingIsOnlyPossibleBeforeArrival() throws Exception {
+        var loc = nextLocation();
+        var customer = loginNew();
+        var partner = approvedOnlinePartner(loc, "tire-patch");
+        String orderId = confirmedOrder(customer, loc, "tire-patch");
+        acceptFirstOffer(partner);
+        postJson("/api/v1/orders/" + orderId + "/withdraw", customer.token, null).andExpect(status().isForbidden());
+        postJson("/api/v1/orders/" + orderId + "/arrive", partner.token, null).andExpect(status().isOk());
+        postJson("/api/v1/orders/" + orderId + "/withdraw", partner.token, null)
+                .andExpect(status().isConflict()).andExpect(jsonPath("$.code").value("INVALID_STATUS_TRANSITION"));
+        assertThat(orderStatus(customer, orderId)).isEqualTo("ARRIVED");
+    }
+
+    @Test
+    void anAdminCannotLockAPartnerWhoIsInTheMiddleOfAnOrder() throws Exception {
+        var loc = nextLocation();
+        var customer = loginNew();
+        var partner = approvedOnlinePartner(loc, "tire-patch");
+        String orderId = confirmedOrder(customer, loc, "tire-patch");
+        acceptFirstOffer(partner);
+        String admin = adminToken();
+        mvc.perform(patch("/api/v1/admin/users/" + partner.userId + "/status").header("Authorization", "Bearer " + admin)
+                .contentType(MediaType.APPLICATION_JSON).content("{\"status\":\"LOCKED\"}"))
+                .andExpect(status().isConflict()).andExpect(jsonPath("$.code").value("PARTNER_HAS_ACTIVE_JOB"));
+        // Once the open order is cancelled by the admin the lock goes through.
+        postJson("/api/v1/orders/" + orderId + "/cancel", admin, Map.of("reason", "Admin xử lý")).andExpect(status().isOk());
+        mvc.perform(patch("/api/v1/admin/users/" + partner.userId + "/status").header("Authorization", "Bearer " + admin)
+                .contentType(MediaType.APPLICATION_JSON).content("{\"status\":\"LOCKED\"}")).andExpect(status().isOk());
+    }
+
     // ------------------------------------------------------------------ one job at a time
 
     @Test
@@ -672,6 +753,12 @@ abstract class OrderFlowContract {
     String orderStatus(Session customer, String orderId) throws Exception {
         return read(mvc.perform(get("/api/v1/orders/" + orderId).header("Authorization", "Bearer " + customer.token))
                 .andExpect(status().isOk()).andReturn()).path("status").asText();
+    }
+
+    /** The partner accepts the offer made for {@code orderId} specifically (they may hold several open offers). */
+    void acceptOfferFor(Session partner, String orderId) throws Exception {
+        var offers = read(mvc.perform(get("/api/v1/partner/offers").header("Authorization", "Bearer " + partner.token)).andReturn());
+        postJson("/api/v1/partner/offers/" + offerIdFor(offers, orderId) + "/accept", partner.token, null).andExpect(status().isOk());
     }
 
     JsonNode getOrder(Session viewer, String orderId) throws Exception {
