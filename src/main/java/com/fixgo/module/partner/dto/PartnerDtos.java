@@ -30,6 +30,13 @@ public final class PartnerDtos {
                                   @DecimalMin("-90") @DecimalMax("90") Double lat,
                                   @DecimalMin("-180") @DecimalMax("180") Double lng) { }
 
+    /** PUT /partner/me/documents — (re)submit the identity documents of an existing partner profile. */
+    public record DocumentsRequest(@NotEmpty @Valid List<DocumentUpload> documents) { }
+
+    /** PUT /partner/me/location — periodic position ping; never touches the partner's availability. */
+    public record LocationRequest(@NotNull @DecimalMin("-90") @DecimalMax("90") Double lat,
+                                  @NotNull @DecimalMin("-180") @DecimalMax("180") Double lng) { }
+
     /** POST /partner/shop/staff — shop owner invites a mechanic by phone (BR06/RB-12: admin still verifies). */
     public record InviteStaffRequest(@NotBlank @Size(max = 20) String phone,
                                      @NotBlank @Size(max = 100) String fullName) { }

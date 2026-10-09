@@ -67,6 +67,7 @@ Nếu thợ đặt `validMinutes`, duyệt/từ chối sau hạn → 409 `QUOTE_
 ## Thợ rút đơn
 `POST /orders/{id}/withdraw` (thợ đã nhận, trạng thái `ASSIGNED`, body `{reason?}`) → 204. Đơn về `REQUESTED` và được phát lại cho thợ khác; thợ đã rút không được mời lại và mất quyền xem đơn. Sau `ARRIVED` trả 409. `POST /orders/{id}/cancel` của thợ khi đơn còn `ASSIGNED` được xử lý như rút đơn (app cũ vẫn chạy).
 Admin khóa tài khoản thợ đang có đơn mở → 409 `PARTNER_HAS_ACTIVE_JOB` (hủy hoặc giao lại đơn trước).
+`PUT /partner/me/location` `{lat,lng}` → 204: app thợ gửi vị trí mỗi ~60 giây khi đang online. Chỉ đổi vị trí, **không** đổi ONLINE/BUSY (khác `PATCH /partner/me/presence`), nên không thể ghi đè trạng thái khi đang nhận/hoàn tất đơn.
 `DISPATCH_LOCATION_MAX_AGE` (vd `10m`; mặc định `0s` = không giới hạn): bỏ qua thợ có vị trí cũ hơn ngưỡng khi chọn thợ — chỉ bật khi app thợ gửi vị trí định kỳ qua `PATCH /partner/me/presence`.
 
 ## Nhân viên tiệm — lời mời (AUTHZ §6.3)
@@ -125,7 +126,7 @@ từ chối khởi động nếu vẫn là `local`** (đĩa Render bị xóa sau
 
 File được nhận dạng theo **nội dung** (JPEG/PNG/WebP/HEIC), không tin `Content-Type` client gửi; HTML/SVG đội lốt ảnh bị từ chối (400 `UNSUPPORTED_FILE`).
 Hồ sơ đăng ký trước Phase này dùng khóa giả (`kyc/front.jpg`): admin thấy `fileAvailable=false` và không thể duyệt cho tới khi có giấy tờ thật.
-Chưa có API nộp lại giấy tờ sau khi bị từ chối (cần làm thêm).
+`PUT /partner/me/documents` `{documents:[ID_FRONT, ID_BACK, SELFIE]}` (cùng quy tắc như lúc đăng ký): thợ thuộc tiệm vừa nhận lời mời (chưa có giấy tờ) hoặc thợ bị từ chối nộp bộ mới → hồ sơ về `PENDING`. Hồ sơ đã `APPROVED` → 409 `ALREADY_VERIFIED`.
 
 ## Trạng thái đơn (ERD §7.1 — 14 giá trị)
 `PENDING_CONFIRMATION → REQUESTED → ASSIGNED → ARRIVED → CHECKING → WAITING_FOR_APPROVAL → APPROVED → IN_PROGRESS → COMPLETED`

@@ -99,6 +99,31 @@ public class PartnerProfileService {
         return toResponse(profile, users.findById(actor.userId()).orElseThrow(UserService::notFound));
     }
 
+    /** Replaces the partner's documents with a fresh set and queues the profile for review again (BR06, RB-12). */
+    @Transactional
+    public PartnerDtos.ProfileResponse submitDocuments(Actor actor, PartnerDtos.DocumentsRequest request) {
+        var profile = profiles.lockById(actor.userId()).orElseThrow(PartnerProfileService::notPartner);
+        if (profile.getVerificationStatus() == VerificationStatus.APPROVED) {
+            throw new ApiException(HttpStatus.CONFLICT, "ALREADY_VERIFIED", "Your profile is already verified.");
+        }
+        kyc.requireOwnUploads(actor.userId(), request.documents());
+        var now = clock.instant();
+        documents.deleteByPartnerId(actor.userId());
+        documents.flush();
+        for (var doc : request.documents()) {
+            documents.save(new PartnerDocument(actor.userId(), doc.documentType(), doc.storageKey(), now));
+        }
+        profile.resubmit();
+        return toResponse(profile, users.findById(actor.userId()).orElseThrow(UserService::notFound));
+    }
+
+    /** Position only (no availability change): the dispatch query and the travel fee read this position (RB-23). */
+    @Transactional
+    public void updateLocation(Actor actor, PartnerDtos.LocationRequest request) {
+        var profile = profiles.lockById(actor.userId()).orElseThrow(PartnerProfileService::notPartner);
+        profile.updateLocation(request.lat(), request.lng(), clock.instant());
+    }
+
     @Transactional(readOnly = true)
     public List<PartnerDtos.StaffResponse> listStaff(Actor actor) {
         var shop = profiles.findById(actor.userId()).orElseThrow(PartnerProfileService::notPartner);

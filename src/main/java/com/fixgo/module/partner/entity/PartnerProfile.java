@@ -72,6 +72,12 @@ public class PartnerProfile {
         verifiedBy = by;
         verifiedAt = now;
     }
+    /** The partner sent new documents: back to the admin's queue. */
+    public void resubmit() {
+        verificationStatus = VerificationStatus.PENDING;
+        verifiedBy = null;
+        verifiedAt = null;
+    }
     public void updatePresence(Availability availability, Double lat, Double lng, Instant now) {
         this.availability = availability;
         if (lat != null && lng != null) {

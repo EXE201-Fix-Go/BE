@@ -51,6 +51,25 @@ public class PartnerController {
         return service.updatePresence(Actor.of(auth), request);
     }
 
+    /**
+     * The partner app sends its position every minute while online. Unlike /me/presence this only moves the
+     * position, so a ping that races with accepting or completing an order can never flip ONLINE/BUSY.
+     */
+    @PutMapping("/me/location")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void location(Authentication auth, @Valid @RequestBody PartnerDtos.LocationRequest request) {
+        service.updateLocation(Actor.of(auth), request);
+    }
+
+    /**
+     * Sends (new) KYC documents for the signed-in partner: shop staff who joined through an invitation have none
+     * yet, and a rejected partner has to send better ones. The profile goes back to PENDING for the admin.
+     */
+    @PutMapping("/me/documents")
+    public PartnerDtos.ProfileResponse documents(Authentication auth, @Valid @RequestBody PartnerDtos.DocumentsRequest request) {
+        return service.submitDocuments(Actor.of(auth), request);
+    }
+
     @GetMapping("/shop/staff")
     public List<PartnerDtos.StaffResponse> staff(Authentication auth) { return service.listStaff(Actor.of(auth)); }
 

@@ -425,6 +425,97 @@ abstract class OrderFlowContract {
                 .contentType(MediaType.APPLICATION_JSON).content("{\"status\":\"LOCKED\"}")).andExpect(status().isOk());
     }
 
+    @Test
+    void aLocationPingMovesThePartnerWithoutTouchingTheirAvailability() throws Exception {
+        var loc = nextLocation();
+        var partner = approvedOnlinePartner(loc, "tire-patch");
+        var customer = loginNew();
+        mvc.perform(put("/api/v1/partner/me/location").header("Authorization", "Bearer " + partner.token)
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"lat\":" + (loc[0] + 0.001) + ",\"lng\":" + loc[1] + "}"))
+                .andExpect(status().isNoContent());
+        var me = read(mvc.perform(get("/api/v1/partner/me").header("Authorization", "Bearer " + partner.token)).andReturn());
+        assertThat(me.path("lat").asDouble()).isEqualTo(loc[0] + 0.001);
+        assertThat(me.path("locationUpdatedAt").isNull()).isFalse();
+        assertThat(me.path("availability").asText()).isEqualTo("ONLINE");
+
+        // While on a job the partner stays BUSY, however many pings arrive.
+        String orderId = confirmedOrder(customer, loc, "tire-patch");
+        acceptFirstOffer(partner);
+        mvc.perform(put("/api/v1/partner/me/location").header("Authorization", "Bearer " + partner.token)
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"lat\":" + loc[0] + ",\"lng\":" + loc[1] + "}"))
+                .andExpect(status().isNoContent());
+        assertThat(availabilityOf(partner)).isEqualTo("BUSY");
+
+        // Bad input and wrong roles are refused (HT-04).
+        mvc.perform(put("/api/v1/partner/me/location").header("Authorization", "Bearer " + partner.token)
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"lat\":123,\"lng\":0}"))
+                .andExpect(status().isBadRequest());
+        mvc.perform(put("/api/v1/partner/me/location").header("Authorization", "Bearer " + partner.token)
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"lat\":10.8}"))
+                .andExpect(status().isBadRequest());
+        mvc.perform(put("/api/v1/partner/me/location").header("Authorization", "Bearer " + customer.token)
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"lat\":10.8,\"lng\":106.7}"))
+                .andExpect(status().isForbidden());
+        mvc.perform(put("/api/v1/partner/me/location").contentType(MediaType.APPLICATION_JSON).content("{\"lat\":10.8,\"lng\":106.7}"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void shopStaffAndRejectedPartnersCanSendDocumentsForReview() throws Exception {
+        // Shop staff join through an invitation and have no documents yet (RB-12: they need their own KYC).
+        var owner = approvedShop();
+        String phone = nextPhone();
+        var staff = login(phone);
+        postJson("/api/v1/partner/shop/staff", owner.token, Map.of("phone", phone, "fullName", "Thợ mới")).andExpect(status().isCreated());
+        String invitationId = read(mvc.perform(get("/api/v1/invitations").header("Authorization", "Bearer " + staff.token)).andReturn())
+                .get(0).path("id").asText();
+        postJson("/api/v1/invitations/" + invitationId + "/accept", staff.token, null).andExpect(status().isOk());
+        assertThat(read(mvc.perform(get("/api/v1/partner/me").header("Authorization", "Bearer " + staff.token)).andReturn())
+                .path("documents")).isEmpty();
+        // Without documents the admin cannot approve (BR06).
+        postJson("/api/v1/admin/partners/" + staff.userId + "/verify", adminToken(), Map.of("status", "APPROVED"))
+                .andExpect(status().isConflict()).andExpect(jsonPath("$.code").value("KYC_DOCUMENTS_MISSING"));
+
+        // Fake keys and incomplete sets are refused, real ones are accepted and the profile stays PENDING.
+        mvc.perform(put("/api/v1/partner/me/documents").header("Authorization", "Bearer " + staff.token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json.writeValueAsString(Map.of("documents", List.of(Map.of("documentType", "ID_FRONT", "storageKey", "kyc/front.jpg"),
+                                Map.of("documentType", "ID_BACK", "storageKey", "kyc/back.jpg"), Map.of("documentType", "SELFIE", "storageKey", "kyc/s.jpg"))))))
+                .andExpect(status().isBadRequest()).andExpect(jsonPath("$.code").value("INVALID_DOCUMENT"));
+        mvc.perform(put("/api/v1/partner/me/documents").header("Authorization", "Bearer " + staff.token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json.writeValueAsString(Map.of("documents", kycDocuments(staff, "ID_FRONT", "ID_BACK")))))
+                .andExpect(status().isBadRequest()).andExpect(jsonPath("$.code").value("KYC_DOCUMENTS_MISSING"));
+        var sent = read(mvc.perform(put("/api/v1/partner/me/documents").header("Authorization", "Bearer " + staff.token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json.writeValueAsString(Map.of("documents", kycDocuments(staff, "ID_FRONT", "ID_BACK", "SELFIE")))))
+                .andExpect(status().isOk()).andReturn());
+        assertThat(sent.path("verificationStatus").asText()).isEqualTo("PENDING");
+        assertThat(sent.path("documents")).hasSize(3);
+        verifyPartner(staff.userId);
+
+        // A rejected partner sends new documents and goes back to the queue; an approved one cannot swap them.
+        var rejected = loginNew();
+        postJson("/api/v1/partner-registration", rejected.token, Map.of("fullName", "Thợ bị từ chối", "partnerType", "INDIVIDUAL",
+                "serviceCodes", List.of("tire-patch"), "documents", kycDocuments(rejected, "ID_FRONT", "ID_BACK", "SELFIE")))
+                .andExpect(status().isCreated());
+        postJson("/api/v1/admin/partners/" + rejected.userId + "/verify", adminToken(), Map.of("status", "REJECTED")).andExpect(status().isOk());
+        var again = read(mvc.perform(put("/api/v1/partner/me/documents").header("Authorization", "Bearer " + rejected.token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json.writeValueAsString(Map.of("documents", kycDocuments(rejected, "ID_FRONT", "ID_BACK", "SELFIE")))))
+                .andExpect(status().isOk()).andReturn());
+        assertThat(again.path("verificationStatus").asText()).isEqualTo("PENDING");
+        verifyPartner(rejected.userId);
+        mvc.perform(put("/api/v1/partner/me/documents").header("Authorization", "Bearer " + rejected.token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json.writeValueAsString(Map.of("documents", kycDocuments(rejected, "ID_FRONT", "ID_BACK", "SELFIE")))))
+                .andExpect(status().isConflict()).andExpect(jsonPath("$.code").value("ALREADY_VERIFIED"));
+        // Customers cannot use it (HT-04).
+        mvc.perform(put("/api/v1/partner/me/documents").header("Authorization", "Bearer " + loginNew().token)
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"documents\":[]}"))
+                .andExpect(status().isForbidden());
+    }
+
     // ------------------------------------------------------------------ one job at a time
 
     @Test
