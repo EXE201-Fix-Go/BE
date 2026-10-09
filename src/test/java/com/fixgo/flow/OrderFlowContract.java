@@ -254,6 +254,96 @@ abstract class OrderFlowContract {
                 .as("0.4 km x 5,000/km = 2,000, not a flat 5,000 for the first kilometre").isEqualTo(2000);
     }
 
+    // ------------------------------------------------------------------ S1 / S12 / NT-02
+
+    @Test
+    void contactDetailsAreHiddenOnceTheOrderEnds() throws Exception {
+        var loc = nextLocation();
+        var customer = loginNew();
+        var partner = approvedOnlinePartner(loc, "tire-patch");
+        String orderId = confirmedOrder(customer, loc, "tire-patch");
+        acceptFirstOffer(partner);
+
+        // While the order is open each side sees the other's contact details (S1).
+        var forCustomer = getOrder(customer, orderId);
+        assertThat(forCustomer.path("partner").path("phone").asText()).isNotBlank();
+        assertThat(forCustomer.path("partner").path("lat").isNull()).isFalse();
+        var forPartner = getOrder(partner, orderId);
+        assertThat(forPartner.path("contactPhone").asText()).isNotBlank();
+        assertThat(forPartner.path("lat").isNull()).isFalse();
+
+        driveToCompletion(orderId, customer, partner);
+
+        // Completed: phone numbers and positions stop being shared; the partner's name stays for the invoice/review.
+        forCustomer = getOrder(customer, orderId);
+        assertThat(forCustomer.path("partner").path("fullName").asText()).isNotBlank();
+        assertThat(forCustomer.path("partner").path("phone").isNull()).isTrue();
+        assertThat(forCustomer.path("partner").path("lat").isNull()).isTrue();
+        assertThat(forCustomer.path("partner").path("lng").isNull()).isTrue();
+        forPartner = getOrder(partner, orderId);
+        assertThat(forPartner.path("contactPhone").isNull()).isTrue();
+        assertThat(forPartner.path("lat").isNull()).isTrue();
+        // The customer's own list is redacted the same way.
+        var list = read(mvc.perform(get("/api/v1/orders").header("Authorization", "Bearer " + customer.token))
+                .andExpect(status().isOk()).andReturn());
+        assertThat(list.get(0).path("partner").path("phone").isNull()).isTrue();
+        // ADMIN keeps full visibility (AUTHZ S1).
+        var admin = login(ADMIN_PHONE);
+        assertThat(getOrder(admin, orderId).path("contactPhone").asText()).isNotBlank();
+    }
+
+    @Test
+    void anExpiredQuoteCannotBeDecidedAndThePartnerMaySendAFreshOne() throws Exception {
+        var loc = nextLocation();
+        var customer = loginNew();
+        var partner = approvedOnlinePartner(loc, "tire-patch");
+        String orderId = confirmedOrder(customer, loc, "tire-patch");
+        acceptFirstOffer(partner);
+        postJson("/api/v1/orders/" + orderId + "/arrive", partner.token, null).andExpect(status().isOk());
+        postJson("/api/v1/orders/" + orderId + "/check", partner.token, null).andExpect(status().isOk());
+        var items = List.of(Map.of("itemType", "LABOR", "description", "Vá xe", "quantity", 1, "unitPrice", 80000));
+        var first = read(postJson("/api/v1/orders/" + orderId + "/quotes", partner.token,
+                Map.of("items", items, "validMinutes", 5)).andExpect(status().isCreated()).andReturn());
+        String firstId = first.path("id").asText();
+
+        testClock().advance(Duration.ofMinutes(6));
+        postJson("/api/v1/orders/" + orderId + "/quotes/" + firstId + "/approve", customer.token, null)
+                .andExpect(status().isConflict()).andExpect(jsonPath("$.code").value("QUOTE_EXPIRED"));
+        postJson("/api/v1/orders/" + orderId + "/quotes/" + firstId + "/decline", customer.token, Map.of("reason", "x"))
+                .andExpect(status().isConflict()).andExpect(jsonPath("$.code").value("QUOTE_EXPIRED"));
+
+        // The expired quote does not block a replacement (RB-46) and the order stays in WAITING_FOR_APPROVAL.
+        var second = read(postJson("/api/v1/orders/" + orderId + "/quotes", partner.token, Map.of("items", items))
+                .andExpect(status().isCreated()).andReturn());
+        assertThat(second.path("revisionNo").asInt()).isEqualTo(2);
+        assertThat(orderStatus(customer, orderId)).isEqualTo("WAITING_FOR_APPROVAL");
+        postJson("/api/v1/orders/" + orderId + "/quotes/" + second.path("id").asText() + "/approve", customer.token, null)
+                .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("APPROVED"));
+        assertThat(orderStatus(customer, orderId)).isEqualTo("IN_PROGRESS");
+        testClock().reset();
+    }
+
+    @Test
+    void onlyPeopleOnTheOrderCanConfirmPaymentOrReview() throws Exception {
+        var loc = nextLocation();
+        var customer = loginNew();
+        var partner = approvedOnlinePartner(loc, "tire-patch");
+        String orderId = confirmedOrder(customer, loc, "tire-patch");
+        acceptFirstOffer(partner);
+        var stranger = loginNew();
+        var otherPartner = approvedOnlinePartner(loc, "tire-patch");
+        for (var outsider : List.of(stranger, otherPartner)) {
+            postJson("/api/v1/orders/" + orderId + "/payment/confirm", outsider.token, null)
+                    .andExpect(status().isNotFound()).andExpect(jsonPath("$.code").value("ORDER_NOT_FOUND"));
+            postJson("/api/v1/orders/" + orderId + "/review", outsider.token, Map.of("rating", 5))
+                    .andExpect(status().isNotFound());
+        }
+        // The partner is on the order but may not review it; the customer may not review before completion.
+        postJson("/api/v1/orders/" + orderId + "/review", partner.token, Map.of("rating", 5)).andExpect(status().isNotFound());
+        postJson("/api/v1/orders/" + orderId + "/review", customer.token, Map.of("rating", 5))
+                .andExpect(status().isConflict()).andExpect(jsonPath("$.code").value("ORDER_NOT_COMPLETED"));
+    }
+
     // ------------------------------------------------------------------ one job at a time
 
     @Test
@@ -582,6 +672,11 @@ abstract class OrderFlowContract {
     String orderStatus(Session customer, String orderId) throws Exception {
         return read(mvc.perform(get("/api/v1/orders/" + orderId).header("Authorization", "Bearer " + customer.token))
                 .andExpect(status().isOk()).andReturn()).path("status").asText();
+    }
+
+    JsonNode getOrder(Session viewer, String orderId) throws Exception {
+        return read(mvc.perform(get("/api/v1/orders/" + orderId).header("Authorization", "Bearer " + viewer.token))
+                .andExpect(status().isOk()).andReturn());
     }
 
     long activeJobs(Session partner) throws Exception {
