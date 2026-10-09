@@ -71,8 +71,14 @@ Mọi thứ nhạy cảm (khóa SMS, service key, mật khẩu DB) chỉ đặt 
 - Biến lúc build: `VITE_API_BASE_URL=https://<backend>/api/v1` (đặt trong GitHub: Settings → Variables → Actions), `VITE_SUPPORT_PHONE` (hotline; trống thì ẩn nút gọi).
   **Không** đặt `VITE_PARTNER_GPS=off` ở bản chạy thật.
 - Origin của web phải có trong `CORS_ALLOWED_ORIGINS`.
-- Hosting: `vite.config.ts` đặt `base: '/'` (Cloudflare Pages / tên miền riêng). GitHub Pages dạng dự án (`.../FE/`) cần đổi `base` cho khớp.
-  Bản build có kèm `404.html` để mở thẳng đường dẫn con (`/partner/login`) không bị 404 trên GitHub Pages.
+- **Cần quyết định hosting.** Workflow `deploy.yml` của repo FE đẩy lên GitHub Pages. Repo là `EXE201-Fix-Go/FE` nên địa chỉ mặc định sẽ là
+  `https://exe201-fix-go.github.io/FE/` (có tiền tố `/FE/`). Biến repo `VITE_BASE` điều khiển điều này:
+  - GitHub Pages dạng dự án: đặt `VITE_BASE=/FE/`;
+  - tên miền riêng hoặc Cloudflare Pages: để trống (mặc định `/`).
+  Workflow sao chép `index.html` thành `404.html` để mở thẳng một đường dẫn con hoặc bấm F5 ở trang con không bị 404 trên GitHub Pages.
+  (Cloudflare Pages tự có chế độ SPA, không dùng workflow này.)
+- Biến repo cần đặt (Settings → Secrets and variables → Actions → Variables): `VITE_API_BASE_URL`, `VITE_SUPPORT_PHONE`, `VITE_BASE` (nếu cần). Để trống `VITE_API_BASE_URL`
+  thì bản build dùng địa chỉ mặc định trong code (`https://fixgo-be-cmlq.onrender.com/api/v1`): **hãy đặt rõ khi go live**.
 
 ## 7. Mobile
 
