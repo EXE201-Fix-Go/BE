@@ -1,6 +1,8 @@
 ﻿spring:
   application:
     name: fixgo-backend
+  lifecycle:
+    timeout-per-shutdown-phase: 20s
   datasource:
     url: ${DB_URL}
     username: ${DB_USERNAME}
@@ -41,6 +43,8 @@ logging:
     level: "%5p [%X{rid:-}]"
 server:
   port: ${PORT:8080}
+  # Deploys: finish in-flight requests before the old instance stops.
+  shutdown: graceful
   error:
     include-message: never
     include-stacktrace: never

@@ -1,7 +1,7 @@
 name: CI
 on:
   push:
-    branches: [main, "feat/**"]
+    branches: [main, "feat/**", "chore/**"]
   pull_request:
 jobs:
   test:
@@ -14,3 +14,9 @@ jobs:
           java-version: 21
           cache: maven
       - run: ./mvnw -B test
+  # Render builds this same Dockerfile; catching a broken image here is cheaper than a failed deploy.
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t fixgo-be:ci .

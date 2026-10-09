@@ -26,39 +26,49 @@ class ProductionSafetyCheckTest {
     private static final SmsProperties LOG_ONLY = new SmsProperties("log", null);
     private static final StorageProperties CLOUD = new StorageProperties("supabase", null, null);
     private static final StorageProperties LOCAL = new StorageProperties("local", null, null);
+    private static final CorsProperties WEB = new CorsProperties(java.util.List.of("https://app.fixgo.vn"));
+    private static final CorsProperties DEV_CORS = new CorsProperties(java.util.List.of("http://localhost:*", "https://app.fixgo.vn"));
 
     @Test
     void productionRefusesToEchoOtpCodes() {
-        assertThatThrownBy(() -> new ProductionSafetyCheck(prod(), auth(true, STRONG), SMS, CLOUD).verify())
+        assertThatThrownBy(() -> new ProductionSafetyCheck(prod(), auth(true, STRONG), SMS, CLOUD, WEB).verify())
                 .hasMessageContaining("OTP_DEV_ECHO");
     }
 
     @Test
     void productionRefusesAShortJwtSecret() {
-        assertThatThrownBy(() -> new ProductionSafetyCheck(prod(), auth(false, "short"), SMS, CLOUD).verify())
+        assertThatThrownBy(() -> new ProductionSafetyCheck(prod(), auth(false, "short"), SMS, CLOUD, WEB).verify())
                 .hasMessageContaining("JWT_SECRET");
     }
 
     @Test
     void productionRefusesToRunWithoutARealSmsProvider() {
-        assertThatThrownBy(() -> new ProductionSafetyCheck(prod(), auth(false, STRONG), LOG_ONLY, CLOUD).verify())
+        assertThatThrownBy(() -> new ProductionSafetyCheck(prod(), auth(false, STRONG), LOG_ONLY, CLOUD, WEB).verify())
                 .hasMessageContaining("SMS_PROVIDER");
     }
 
     @Test
     void productionRefusesToKeepUploadsOnTheServerDisk() {
-        assertThatThrownBy(() -> new ProductionSafetyCheck(prod(), auth(false, STRONG), SMS, LOCAL).verify())
+        assertThatThrownBy(() -> new ProductionSafetyCheck(prod(), auth(false, STRONG), SMS, LOCAL, WEB).verify())
                 .hasMessageContaining("STORAGE_PROVIDER");
     }
 
     @Test
+    void productionRefusesDevelopmentCorsOrigins() {
+        assertThatThrownBy(() -> new ProductionSafetyCheck(prod(), auth(false, STRONG), SMS, CLOUD, DEV_CORS).verify())
+                .hasMessageContaining("CORS_ALLOWED_ORIGINS");
+        assertThatThrownBy(() -> new ProductionSafetyCheck(prod(), auth(false, STRONG), SMS, CLOUD,
+                new CorsProperties(java.util.List.of("*"))).verify()).hasMessageContaining("CORS_ALLOWED_ORIGINS");
+    }
+
+    @Test
     void productionStartsWithSafeSettings() {
-        assertThatCode(() -> new ProductionSafetyCheck(prod(), auth(false, STRONG), SMS, CLOUD).verify()).doesNotThrowAnyException();
+        assertThatCode(() -> new ProductionSafetyCheck(prod(), auth(false, STRONG), SMS, CLOUD, WEB).verify()).doesNotThrowAnyException();
     }
 
     @Test
     void developerMachinesMayEchoCodes() {
-        assertThatCode(() -> new ProductionSafetyCheck(new MockEnvironment(), auth(true, "dev"), LOG_ONLY, LOCAL).verify())
+        assertThatCode(() -> new ProductionSafetyCheck(new MockEnvironment(), auth(true, "dev"), LOG_ONLY, LOCAL, DEV_CORS).verify())
                 .doesNotThrowAnyException();
     }
 }

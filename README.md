@@ -8,7 +8,7 @@ Xác thực **OTP + JWT tự quản** — không lưu mật khẩu (C-06). Schem
 2. Đặt biến môi trường (xem `.env.example`): `DB_URL`, `DB_USERNAME`, `DB_PASSWORD`, `JWT_SECRET`, tùy chọn `OTP_DEV_ECHO=true`, `BOOTSTRAP_ADMIN_PHONE`.
 3. `.\mvnw.cmd spring-boot:run` — Flyway tạo schema `fixgo` (V1) + dữ liệu tham chiếu (V2: bảng giá, phí gọi thợ 30k, vòng điều phối).
 
-Chi tiết kết nối: `docs/supabase-setup.md`. API: `docs/api.md`.
+Chi tiết kết nối: `docs/supabase-setup.md`. API: `docs/api.md`. Triển khai thật (Render, eSMS, Supabase Storage, checklist go-live): `docs/deploy.md`.
 
 ## Test
 - Không cần Docker: trỏ `TEST_DB_URL` / `TEST_DB_USERNAME` / `TEST_DB_PASSWORD` tới DB PostGIS (schema `fixgo_test` bị xóa & tạo lại mỗi lần chạy).
