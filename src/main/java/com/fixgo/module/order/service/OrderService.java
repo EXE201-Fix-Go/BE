@@ -136,7 +136,7 @@ public class OrderService {
         };
         if (!allowed) throw notFoundOrForbidden(actor, order);
         cancelLocked(order, actor, reason);
-        return toResponse(order);
+        return viewFor(actor, order);
     }
 
     /** Shared with quote decline (GW-02). Caller holds the order lock. */
@@ -168,21 +168,21 @@ public class OrderService {
         var order = lockAssigned(actor, orderId);
         stateMachine.transition(order, OrderStatus.ARRIVED, actor.userId(), ActorType.PARTNER, null);
         dispatch.currentAssignment(orderId).ifPresent(a -> a.markArrived(clock.instant()));
-        return toResponse(order);
+        return viewFor(actor, order);
     }
 
     @Transactional
     public OrderDtos.OrderResponse startChecking(Actor actor, UUID orderId) {
         var order = lockAssigned(actor, orderId);
         stateMachine.transition(order, OrderStatus.CHECKING, actor.userId(), ActorType.PARTNER, null);
-        return toResponse(order);
+        return viewFor(actor, order);
     }
 
     @Transactional
     public OrderDtos.OrderResponse pause(Actor actor, UUID orderId, String note) {
         var order = lockAssigned(actor, orderId);
         stateMachine.transition(order, OrderStatus.PAUSED, actor.userId(), ActorType.PARTNER, note);
-        return toResponse(order);
+        return viewFor(actor, order);
     }
 
     @Transactional
@@ -190,7 +190,7 @@ public class OrderService {
         var order = lockAssigned(actor, orderId);
         if (order.getStatus() != OrderStatus.PAUSED) throw OrderStateMachine.wrongState(order.getStatus(), "resume");
         stateMachine.transition(order, OrderStatus.IN_PROGRESS, actor.userId(), ActorType.PARTNER, null);
-        return toResponse(order);
+        return viewFor(actor, order);
     }
 
     /** BR02: nothing completes without an APPROVED quote; the amount due is that quote's total (RB-42). */
@@ -208,14 +208,14 @@ public class OrderService {
                 "order:" + orderId + ":final");
         // Pilot: the partner collects cash when finishing, so completing IS the payment confirmation (RB-59).
         payments.confirmIfPending(actor, orderId);
-        return toResponse(order);
+        return viewFor(actor, order);
     }
 
     // ------------------------------------------------------------------ read
 
     @Transactional(readOnly = true)
     public OrderDtos.OrderResponse get(Actor actor, UUID orderId) {
-        return toResponse(visibleOrder(actor, orderId));
+        return viewFor(actor, visibleOrder(actor, orderId));
     }
 
     /** Lightweight poll target: status only (3 queries instead of ~15), so mobile clients can poll cheaply. */
@@ -240,7 +240,7 @@ public class OrderService {
     @Transactional(readOnly = true)
     public List<OrderDtos.OrderResponse> listMine(Actor actor) {
         if (!actor.is(Role.CUSTOMER)) throw forbidden();
-        return orders.findByCustomerIdOrderByCreatedAtDesc(actor.userId()).stream().map(this::toResponse).toList();
+        return orders.findByCustomerIdOrderByCreatedAtDesc(actor.userId()).stream().map(o -> viewFor(actor, o)).toList();
     }
 
     // ------------------------------------------------------------------ helpers
@@ -269,6 +269,29 @@ public class OrderService {
         boolean related = order.getCustomerId().equals(actor.userId()) || isCurrentPartner(actor, order)
                 || actor.is(Role.ADMIN);
         return related ? forbidden() : notFound();
+    }
+
+    /**
+     * S1: phone numbers and live positions are shared only while the order is open. Once it is COMPLETED or
+     * CANCELLED the customer stops seeing the partner's contact/position and the partner stops seeing the
+     * customer's phone and exact pickup point. ADMIN sees everything.
+     */
+    private OrderDtos.OrderResponse viewFor(Actor actor, RescueOrder o) {
+        var response = toResponse(o);
+        if (!o.getStatus().isTerminal()) return response;
+        return switch (actor.role()) {
+            case CUSTOMER -> response.withoutPartnerContact();
+            case PARTNER -> response.withoutCustomerContact();
+            case ADMIN -> response;
+        };
+    }
+
+    /** "Đã thanh toán" (RB-59): same visibility rule as reading the order, checked in the same transaction as the write. */
+    @Transactional
+    public OrderDtos.OrderResponse confirmPayment(Actor actor, UUID orderId) {
+        var order = visibleOrder(actor, orderId);
+        payments.confirm(actor, orderId);
+        return viewFor(actor, order);
     }
 
     @Transactional(readOnly = true)
