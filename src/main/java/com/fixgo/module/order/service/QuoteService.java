@@ -60,15 +60,30 @@ public class QuoteService {
             throw new ApiException(HttpStatus.BAD_REQUEST, "TRAVEL_FEE_NOT_EDITABLE",
                     "The travel fee is added by the system and cannot be sent in a quote.");
         }
-        if (quotes.findFirstByOrderIdAndStatus(orderId, Quote.Status.SENT).isPresent()) {
-            throw new ApiException(HttpStatus.CONFLICT, "QUOTE_ALREADY_SENT", "A quote is already awaiting the customer.");
+        var now = clock.instant();
+        // RB-46: one SENT quote at a time. An expired one (S12) can never be approved, so the partner may replace it.
+        var pending = quotes.findFirstByOrderIdAndStatus(orderId, Quote.Status.SENT).orElse(null);
+        boolean replacesExpired = false;
+        if (pending != null) {
+            if (!pending.isExpired(now)) {
+                throw new ApiException(HttpStatus.CONFLICT, "QUOTE_ALREADY_SENT", "A quote is already awaiting the customer.");
+            }
+            pending.expire();
+            replacesExpired = true;
         }
         Quote.Type type = switch (order.getStatus()) {
             case CHECKING -> Quote.Type.INITIAL;
             case IN_PROGRESS -> Quote.Type.ADDITIONAL;
+            case WAITING_FOR_APPROVAL -> {
+                if (!replacesExpired) throw OrderStateMachine.wrongState(order.getStatus(), "quote");
+                yield Quote.Type.INITIAL;
+            }
+            case ADDITIONAL_QUOTE -> {
+                if (!replacesExpired) throw OrderStateMachine.wrongState(order.getStatus(), "quote");
+                yield Quote.Type.ADDITIONAL;
+            }
             default -> throw OrderStateMachine.wrongState(order.getStatus(), "quote");
         };
-        var now = clock.instant();
         int revision = quotes.findFirstByOrderIdOrderByRevisionNoDesc(orderId).map(q -> q.getRevisionNo() + 1).orElse(1);
         var quote = new Quote(orderId, actor.userId(), revision, type, order.getCallOutFeeSnapshot(), now,
                 request.validMinutes() == null ? null : now.plus(Duration.ofMinutes(request.validMinutes())));
@@ -89,8 +104,10 @@ public class QuoteService {
         }
         quote.send(now);
         quotes.save(quote);
-        stateMachine.transition(order, type == Quote.Type.INITIAL ? OrderStatus.WAITING_FOR_APPROVAL
-                : OrderStatus.ADDITIONAL_QUOTE, actor.userId(), ActorType.PARTNER, "Quote revision " + revision + " sent");
+        var target = type == Quote.Type.INITIAL ? OrderStatus.WAITING_FOR_APPROVAL : OrderStatus.ADDITIONAL_QUOTE;
+        if (order.getStatus() != target) {          // already there when an expired quote is being replaced
+            stateMachine.transition(order, target, actor.userId(), ActorType.PARTNER, "Quote revision " + revision + " sent");
+        }
         return mapper.toResponse(quote);
     }
 
@@ -98,8 +115,8 @@ public class QuoteService {
     @Transactional
     public QuoteDtos.QuoteResponse approve(Actor actor, UUID orderId, UUID quoteId) {
         var order = lockAsCustomer(actor, orderId);
-        var quote = lockSent(orderId, quoteId);
         var now = clock.instant();
+        var quote = lockSent(orderId, quoteId, now);
         quotes.findFirstByOrderIdAndStatusOrderByRevisionNoDesc(orderId, Quote.Status.APPROVED).ifPresent(Quote::supersede);
         quote.approve(actor.userId(), now);
         if (order.getStatus() == OrderStatus.WAITING_FOR_APPROVAL) {
@@ -120,7 +137,7 @@ public class QuoteService {
     @Transactional
     public QuoteDtos.QuoteResponse decline(Actor actor, UUID orderId, UUID quoteId, String reason) {
         var order = lockAsCustomer(actor, orderId);
-        var quote = lockSent(orderId, quoteId);
+        var quote = lockSent(orderId, quoteId, clock.instant());
         quote.decline(actor.userId(), reason, clock.instant());
         if (order.getStatus() == OrderStatus.WAITING_FOR_APPROVAL) {
             orderService.cancelLocked(order, actor, "QUOTE_DECLINED" + (reason == null ? "" : ": " + reason));
@@ -146,11 +163,15 @@ public class QuoteService {
         return order;
     }
 
-    private Quote lockSent(UUID orderId, UUID quoteId) {
+    private Quote lockSent(UUID orderId, UUID quoteId, java.time.Instant now) {
         var quote = quotes.lockById(quoteId).orElseThrow(QuoteService::quoteNotFound);
         if (!quote.getOrderId().equals(orderId)) throw quoteNotFound();
         if (quote.getStatus() != Quote.Status.SENT) {
             throw new ApiException(HttpStatus.CONFLICT, "QUOTE_NOT_PENDING", "This quote is not awaiting a decision.");
+        }
+        if (quote.isExpired(now)) {                                          // S12
+            throw new ApiException(HttpStatus.CONFLICT, "QUOTE_EXPIRED",
+                    "This quote has expired. Ask the mechanic for a new quote or cancel the order.");
         }
         return quote;
     }
