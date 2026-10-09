@@ -658,30 +658,145 @@ abstract class OrderFlowContract {
     }
 
     @Test
-    void shopOwnerInvitesStaffWhoStillNeedKyc() throws Exception {
-        var loc = nextLocation();
+    void shopStaffJoinOnlyByAcceptingAnInvitationAndStillNeedKyc() throws Exception {
         var owner = loginNew();
         var profile = read(postJson("/api/v1/partner-registration", owner.token, Map.of("fullName", "Chủ tiệm A",
                 "partnerType", "SHOP", "shopName", "Tiệm A", "serviceCodes", List.of("tire-patch", "oil-change"),
                 "documents", List.of(Map.of("documentType", "ID_FRONT", "storageKey", "kyc/a/front.jpg"))))
                 .andExpect(status().isCreated()).andReturn());
         assertThat(profile.path("verificationStatus").asText()).isEqualTo("PENDING");
+        String staffPhone = nextPhone();
+        // BR06: a shop the admin has not approved cannot recruit.
+        postJson("/api/v1/partner/shop/staff", owner.token, Map.of("phone", staffPhone, "fullName", "Thợ B"))
+                .andExpect(status().isForbidden()).andExpect(jsonPath("$.code").value("PARTNER_NOT_VERIFIED"));
         verifyPartner(owner.userId);
         var me = read(mvc.perform(get("/api/v1/users/me").header("Authorization", "Bearer " + owner.token)).andReturn());
         assertThat(me.path("appRole").asText()).isEqualTo("P_SHOP");
 
-        String staffPhone = nextPhone();
-        var staff = read(postJson("/api/v1/partner/shop/staff", owner.token, Map.of("phone", staffPhone, "fullName", "Thợ B"))
+        // Inviting only records the invitation: the invited person's account is untouched.
+        var invitee = login(staffPhone);
+        var staffList = read(postJson("/api/v1/partner/shop/staff", owner.token, Map.of("phone", staffPhone, "fullName", "Thợ B"))
                 .andExpect(status().isCreated()).andReturn());
+        assertThat(staffList).isEmpty();
+        assertThat(invitee.role).isEqualTo("CUSTOMER");
+        assertThat(read(mvc.perform(get("/api/v1/users/me").header("Authorization", "Bearer " + invitee.token)).andReturn())
+                .path("appRole").asText()).isEqualTo("CUSTOMER");
+        postJson("/api/v1/partner/shop/staff", owner.token, Map.of("phone", staffPhone, "fullName", "Thợ B"))
+                .andExpect(status().isConflict()).andExpect(jsonPath("$.code").value("INVITATION_PENDING"));
+        var forShop = read(mvc.perform(get("/api/v1/partner/shop/invitations").header("Authorization", "Bearer " + owner.token))
+                .andExpect(status().isOk()).andReturn());
+        assertThat(forShop).hasSize(1);
+        assertThat(forShop.get(0).path("status").asText()).isEqualTo("PENDING");
+
+        // Only the invited number sees and can answer it.
+        var mine = read(mvc.perform(get("/api/v1/invitations").header("Authorization", "Bearer " + invitee.token))
+                .andExpect(status().isOk()).andReturn());
+        assertThat(mine).hasSize(1);
+        assertThat(mine.get(0).path("shopName").asText()).isEqualTo("Tiệm A");
+        String invitationId = mine.get(0).path("id").asText();
+        var stranger = loginNew();
+        assertThat(read(mvc.perform(get("/api/v1/invitations").header("Authorization", "Bearer " + stranger.token)).andReturn())).isEmpty();
+        postJson("/api/v1/invitations/" + invitationId + "/accept", stranger.token, null).andExpect(status().isNotFound());
+        postJson("/api/v1/invitations/" + invitationId + "/accept", owner.token, null).andExpect(status().isNotFound());
+        postJson("/api/v1/invitations/" + invitationId + "/accept", adminToken(), null).andExpect(status().isForbidden());
+
+        // Accepting is the invitee's own act: the account becomes shop staff, still PENDING KYC (RB-12).
+        var accepted = read(postJson("/api/v1/invitations/" + invitationId + "/accept", invitee.token, null)
+                .andExpect(status().isOk()).andReturn());
+        assertThat(accepted.path("partnerType").asText()).isEqualTo("SHOP_STAFF");
+        assertThat(accepted.path("verificationStatus").asText()).isEqualTo("PENDING");
+        assertThat(accepted.path("serviceCodes")).hasSize(2);                                  // inherits the shop's services
+        assertThat(read(mvc.perform(get("/api/v1/users/me").header("Authorization", "Bearer " + invitee.token)).andReturn())
+                .path("appRole").asText()).isEqualTo("P_STAFF");
+        var staff = read(mvc.perform(get("/api/v1/partner/shop/staff").header("Authorization", "Bearer " + owner.token)).andReturn());
         assertThat(staff).hasSize(1);
-        assertThat(staff.get(0).path("verificationStatus").asText()).isEqualTo("PENDING");            // RB-12
-        var staffSession = login(staffPhone);
-        assertThat(staffSession.role).isEqualTo("P_STAFF");
+        // Answered once only; the same phone cannot be invited again while it belongs to a shop.
+        postJson("/api/v1/invitations/" + invitationId + "/accept", invitee.token, null).andExpect(status().isConflict());
+        postJson("/api/v1/partner/shop/staff", owner.token, Map.of("phone", staffPhone, "fullName", "Thợ B"))
+                .andExpect(status().isConflict()).andExpect(jsonPath("$.code").value("ALREADY_PARTNER"));
         // A staff member is not a shop owner.
-        mvc.perform(get("/api/v1/partner/shop/staff").header("Authorization", "Bearer " + staffSession.token))
+        mvc.perform(get("/api/v1/partner/shop/staff").header("Authorization", "Bearer " + invitee.token))
                 .andExpect(status().isForbidden());
         // Customers cannot touch partner endpoints at all.
         mvc.perform(get("/api/v1/partner/me").header("Authorization", "Bearer " + loginNew().token)).andExpect(status().isForbidden());
+    }
+
+    @Test
+    void anInvitationCanBeDeclinedOrCancelledAndNeverTouchesTheAccount() throws Exception {
+        var owner = approvedShop();
+        String declinePhone = nextPhone();
+        String cancelPhone = nextPhone();
+        var decliner = login(declinePhone);
+        var cancelled = login(cancelPhone);
+        postJson("/api/v1/partner/shop/staff", owner.token, Map.of("phone", declinePhone, "fullName", "A")).andExpect(status().isCreated());
+        postJson("/api/v1/partner/shop/staff", owner.token, Map.of("phone", cancelPhone, "fullName", "B")).andExpect(status().isCreated());
+
+        String declineId = read(mvc.perform(get("/api/v1/invitations").header("Authorization", "Bearer " + decliner.token)).andReturn())
+                .get(0).path("id").asText();
+        postJson("/api/v1/invitations/" + declineId + "/decline", decliner.token, null).andExpect(status().isNoContent());
+        assertThat(read(mvc.perform(get("/api/v1/invitations").header("Authorization", "Bearer " + decliner.token)).andReturn())).isEmpty();
+        postJson("/api/v1/invitations/" + declineId + "/accept", decliner.token, null).andExpect(status().isConflict());
+
+        String cancelId = read(mvc.perform(get("/api/v1/invitations").header("Authorization", "Bearer " + cancelled.token)).andReturn())
+                .get(0).path("id").asText();
+        // Another shop's owner cannot cancel it; its own owner can.
+        var other = approvedShop();
+        mvc.perform(delete("/api/v1/partner/shop/invitations/" + cancelId).header("Authorization", "Bearer " + other.token))
+                .andExpect(status().isNotFound());
+        mvc.perform(delete("/api/v1/partner/shop/invitations/" + cancelId).header("Authorization", "Bearer " + owner.token))
+                .andExpect(status().isNoContent());
+        postJson("/api/v1/invitations/" + cancelId + "/accept", cancelled.token, null).andExpect(status().isConflict());
+        for (var person : List.of(decliner, cancelled)) {
+            assertThat(read(mvc.perform(get("/api/v1/users/me").header("Authorization", "Bearer " + person.token)).andReturn())
+                    .path("appRole").asText()).isEqualTo("CUSTOMER");
+        }
+    }
+
+    @Test
+    void aCustomerWithAnOpenOrderCannotBecomeStaffUntilItEnds() throws Exception {
+        var loc = nextLocation();
+        var owner = approvedShop();
+        String phone = nextPhone();
+        var customer = login(phone);
+        confirmedOrder(customer, loc, "tire-patch");
+        postJson("/api/v1/partner/shop/staff", owner.token, Map.of("phone", phone, "fullName", "Khách")).andExpect(status().isCreated());
+        String id = read(mvc.perform(get("/api/v1/invitations").header("Authorization", "Bearer " + customer.token)).andReturn())
+                .get(0).path("id").asText();
+        postJson("/api/v1/invitations/" + id + "/accept", customer.token, null)
+                .andExpect(status().isConflict()).andExpect(jsonPath("$.code").value("CUSTOMER_HAS_ACTIVE_ORDER"));
+        assertThat(read(mvc.perform(get("/api/v1/users/me").header("Authorization", "Bearer " + customer.token)).andReturn())
+                .path("appRole").asText()).isEqualTo("CUSTOMER");
+    }
+
+    @Test
+    void staffCanLeaveAndTheOwnerCanRemoveThemWithoutLosingTheAccount() throws Exception {
+        var owner = approvedShop();
+        var rival = approvedShop();
+        String phone = nextPhone();
+        var staff = login(phone);
+        postJson("/api/v1/partner/shop/staff", owner.token, Map.of("phone", phone, "fullName", "Thợ")).andExpect(status().isCreated());
+        String id = read(mvc.perform(get("/api/v1/invitations").header("Authorization", "Bearer " + staff.token)).andReturn()).get(0).path("id").asText();
+        postJson("/api/v1/invitations/" + id + "/accept", staff.token, null).andExpect(status().isOk());
+
+        // Another shop cannot remove this person; the owner can.
+        mvc.perform(delete("/api/v1/partner/shop/staff/" + staff.userId).header("Authorization", "Bearer " + rival.token))
+                .andExpect(status().isNotFound());
+        mvc.perform(delete("/api/v1/partner/shop/staff/" + staff.userId).header("Authorization", "Bearer " + owner.token))
+                .andExpect(status().isNoContent());
+        assertThat(read(mvc.perform(get("/api/v1/partner/me").header("Authorization", "Bearer " + staff.token))
+                .andExpect(status().isOk()).andReturn()).path("partnerType").asText()).isEqualTo("INDIVIDUAL");
+        assertThat(read(mvc.perform(get("/api/v1/partner/shop/staff").header("Authorization", "Bearer " + owner.token)).andReturn())).isEmpty();
+
+        // An individual partner can be invited too (AUTHZ: P-IND accepts) and can leave on their own.
+        postJson("/api/v1/partner/shop/staff", rival.token, Map.of("phone", phone, "fullName", "Thợ")).andExpect(status().isCreated());
+        String id2 = read(mvc.perform(get("/api/v1/invitations").header("Authorization", "Bearer " + staff.token)).andReturn()).get(0).path("id").asText();
+        assertThat(read(postJson("/api/v1/invitations/" + id2 + "/accept", staff.token, null).andExpect(status().isOk()).andReturn())
+                .path("partnerType").asText()).isEqualTo("SHOP_STAFF");
+        postJson("/api/v1/partner/shop/leave", staff.token, null).andExpect(status().isNoContent());
+        assertThat(read(mvc.perform(get("/api/v1/partner/me").header("Authorization", "Bearer " + staff.token)).andReturn())
+                .path("partnerType").asText()).isEqualTo("INDIVIDUAL");
+        // Someone who is not staff has nothing to leave.
+        postJson("/api/v1/partner/shop/leave", staff.token, null).andExpect(status().isConflict());
     }
 
     // ------------------------------------------------------------------ helpers
@@ -720,6 +835,17 @@ abstract class OrderFlowContract {
                         .content(json.writeValueAsString(Map.of("availability", "ONLINE", "lat", loc[0], "lng", loc[1]))))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.availability").value("ONLINE"));
         return s;
+    }
+
+    /** A registered, admin-approved SHOP owner. */
+    Session approvedShop() throws Exception {
+        var owner = loginNew();
+        postJson("/api/v1/partner-registration", owner.token, Map.of("fullName", "Chủ tiệm", "partnerType", "SHOP",
+                "shopName", "Tiệm " + owner.userId.substring(0, 4), "serviceCodes", List.of("tire-patch"),
+                "documents", List.of(Map.of("documentType", "ID_FRONT", "storageKey", "kyc/shop/front.jpg"))))
+                .andExpect(status().isCreated());
+        verifyPartner(owner.userId);
+        return owner;
     }
 
     void verifyPartner(String partnerUserId) throws Exception {

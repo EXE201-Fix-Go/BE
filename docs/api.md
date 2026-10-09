@@ -69,6 +69,22 @@ Nếu thợ đặt `validMinutes`, duyệt/từ chối sau hạn → 409 `QUOTE_
 Admin khóa tài khoản thợ đang có đơn mở → 409 `PARTNER_HAS_ACTIVE_JOB` (hủy hoặc giao lại đơn trước).
 `DISPATCH_LOCATION_MAX_AGE` (vd `10m`; mặc định `0s` = không giới hạn): bỏ qua thợ có vị trí cũ hơn ngưỡng khi chọn thợ — chỉ bật khi app thợ gửi vị trí định kỳ qua `PATCH /partner/me/presence`.
 
+## Nhân viên tiệm — lời mời (AUTHZ §6.3)
+Chủ tiệm chỉ **mời**, tài khoản người được mời không bị đổi cho tới khi họ tự chấp nhận.
+
+| Endpoint | Ai | Ghi chú |
+|---|---|---|
+| `POST /partner/shop/staff` `{phone, fullName}` | chủ tiệm đã được duyệt | tạo lời mời `PENDING` (hạn 7 ngày); trả danh sách nhân viên như cũ. 403 `PARTNER_NOT_VERIFIED` nếu tiệm chưa duyệt, 409 `INVITATION_PENDING` / `ALREADY_PARTNER` |
+| `GET /partner/shop/invitations` | chủ tiệm | lời mời đã gửi (`PENDING/ACCEPTED/DECLINED/CANCELLED/EXPIRED`) |
+| `DELETE /partner/shop/invitations/{id}` | chủ tiệm | hủy lời mời đang chờ → 204 |
+| `DELETE /partner/shop/staff/{userId}` | chủ tiệm | gỡ nhân viên, họ thành đối tác cá nhân → 204 (409 nếu đang có đơn) |
+| `POST /partner/shop/leave` | nhân viên | tự rời tiệm → 204 |
+| `GET /invitations` | người được mời (khách hoặc đối tác cá nhân) | lời mời đang mở gửi tới SĐT của mình |
+| `POST /invitations/{id}/accept` | người được mời | khách → `SHOP_STAFF` (vẫn chờ KYC, RB-12); trả hồ sơ đối tác. 409 `CUSTOMER_HAS_ACTIVE_ORDER` nếu khách còn đơn mở |
+| `POST /invitations/{id}/decline` | người được mời | → 204 |
+
+Lời mời của người khác trả 404 (không lộ tồn tại). Migration `V7__shop_invitations.sql`.
+
 ## Trạng thái đơn (ERD §7.1 — 14 giá trị)
 `PENDING_CONFIRMATION → REQUESTED → ASSIGNED → ARRIVED → CHECKING → WAITING_FOR_APPROVAL → APPROVED → IN_PROGRESS → COMPLETED`
 + `ADDITIONAL_QUOTE`, `PAUSED`, `CANCELLED`, `NO_PARTNER_FOUND`, `EXPIRED`. Chuyển trạng thái sai → 409 `INVALID_STATUS_TRANSITION`.
