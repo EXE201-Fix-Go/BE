@@ -35,6 +35,10 @@
     multipart:
       max-file-size: 10MB
       max-request-size: 12MB
+logging:
+  pattern:
+    # rid = per-request id set by RequestLogFilter (also returned as the X-Request-Id header)
+    level: "%5p [%X{rid:-}]"
 server:
   port: ${PORT:8080}
   error:
