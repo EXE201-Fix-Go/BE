@@ -904,7 +904,9 @@ abstract class OrderFlowContract {
         var owner = approvedShop();
         String phone = nextPhone();
         var customer = login(phone);
-        confirmedOrder(customer, loc, "tire-patch");
+        // A partner in range keeps the order open (offered). With nobody around it would end at once as NO_PARTNER_FOUND.
+        approvedOnlinePartner(loc, "tire-patch");
+        String orderId = confirmedOrder(customer, loc, "tire-patch");
         postJson("/api/v1/partner/shop/staff", owner.token, Map.of("phone", phone, "fullName", "Khách")).andExpect(status().isCreated());
         String id = read(mvc.perform(get("/api/v1/invitations").header("Authorization", "Bearer " + customer.token)).andReturn())
                 .get(0).path("id").asText();
@@ -912,6 +914,12 @@ abstract class OrderFlowContract {
                 .andExpect(status().isConflict()).andExpect(jsonPath("$.code").value("CUSTOMER_HAS_ACTIVE_ORDER"));
         assertThat(read(mvc.perform(get("/api/v1/users/me").header("Authorization", "Bearer " + customer.token)).andReturn())
                 .path("appRole").asText()).isEqualTo("CUSTOMER");
+
+        // Once the order has ended the same invitation can be accepted.
+        postJson("/api/v1/orders/" + orderId + "/cancel", customer.token, Map.of("reason", "Đổi ý")).andExpect(status().isOk());
+        postJson("/api/v1/invitations/" + id + "/accept", customer.token, null).andExpect(status().isOk());
+        assertThat(read(mvc.perform(get("/api/v1/users/me").header("Authorization", "Bearer " + customer.token)).andReturn())
+                .path("appRole").asText()).isEqualTo("P_STAFF");
     }
 
     @Test
