@@ -58,7 +58,7 @@ Vòng điều phối (`dispatch_policies`, BR08): 2 km/60 s → 4 km/75 s → 7 
 + `ADDITIONAL_QUOTE`, `PAUSED`, `CANCELLED`, `NO_PARTNER_FOUND`, `EXPIRED`. Chuyển trạng thái sai → 409 `INVALID_STATUS_TRANSITION`.
 
 ## Dữ liệu test (dev)
-Chạy với `DEV_SEED=true` (run-dev.ps1 bật sẵn): khách `0901000001`, thợ đã duyệt & online `0902000001`, `0902000002`, chủ tiệm `0903000001` (+ nhân viên `0903000002`), kèm 3 đơn mẫu (hoàn tất / hủy sau khi thợ tới / không tìm được thợ). Mã OTP lấy từ `devCode` khi `OTP_DEV_ECHO=true`.
+Không còn dữ liệu mẫu: tài khoản đăng nhập bằng OTP (xem `devCode` khi `OTP_DEV_ECHO=true`); tài khoản admin đầu tiên tạo qua `BOOTSTRAP_ADMIN_PHONE`.
 
 ## Lỗi
 `{timestamp, status, code, message, path, fieldErrors}`. Mã hay gặp: `INVALID_OTP`, `OTP_RATE_LIMITED`, `INVALID_REFRESH_TOKEN`,
