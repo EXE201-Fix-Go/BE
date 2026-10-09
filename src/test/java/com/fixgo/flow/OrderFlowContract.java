@@ -583,6 +583,61 @@ abstract class OrderFlowContract {
                 .andExpect(status().isForbidden()).andExpect(jsonPath("$.code").value("PARTNER_NOT_VERIFIED"));   // BR06
     }
 
+    // ------------------------------------------------------------------ KYC documents (BR06)
+
+    @Test
+    void kycDocumentsAreRealUploadsOfTheRegistrantAndOnlyAnAdminCanReadThem() throws Exception {
+        var s = loginNew();
+        var other = loginNew();
+        var body = new java.util.HashMap<String, Object>(Map.of("fullName", "Thợ KYC", "partnerType", "INDIVIDUAL",
+                "serviceCodes", List.of("tire-patch")));
+        // A made-up key, or someone else's upload, is refused.
+        body.put("documents", List.of(Map.of("documentType", "ID_FRONT", "storageKey", "kyc/front.jpg"),
+                Map.of("documentType", "ID_BACK", "storageKey", "kyc/back.jpg"), Map.of("documentType", "SELFIE", "storageKey", "kyc/selfie.jpg")));
+        postJson("/api/v1/partner-registration", s.token, body).andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("INVALID_DOCUMENT"));
+        body.put("documents", kycDocuments(other, "ID_FRONT", "ID_BACK", "SELFIE"));
+        postJson("/api/v1/partner-registration", s.token, body).andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("INVALID_DOCUMENT"));
+        // All three document types are needed.
+        body.put("documents", kycDocuments(s, "ID_FRONT", "ID_BACK"));
+        postJson("/api/v1/partner-registration", s.token, body).andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("KYC_DOCUMENTS_MISSING"));
+        // Only images are accepted, whatever the client says the file is; anonymous uploads are refused.
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart("/api/v1/uploads/kyc")
+                        .file(new org.springframework.mock.web.MockMultipartFile("file", "id.jpg", "image/jpeg", "<html>".getBytes()))
+                        .header("Authorization", "Bearer " + s.token))
+                .andExpect(status().isBadRequest()).andExpect(jsonPath("$.code").value("UNSUPPORTED_FILE"));
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart("/api/v1/uploads/kyc")
+                        .file(new org.springframework.mock.web.MockMultipartFile("file", "id.jpg", "image/jpeg", JPEG)))
+                .andExpect(status().isUnauthorized());
+
+        body.put("documents", kycDocuments(s, "ID_FRONT", "ID_BACK", "SELFIE"));
+        postJson("/api/v1/partner-registration", s.token, body).andExpect(status().isCreated());
+
+        // Only an admin lists and reads the files; they are streamed by the backend, never linked.
+        String admin = adminToken();
+        var docs = read(mvc.perform(get("/api/v1/admin/partners/" + s.userId + "/documents").header("Authorization", "Bearer " + admin))
+                .andExpect(status().isOk()).andReturn());
+        assertThat(docs).hasSize(3);
+        assertThat(docs.get(0).path("fileAvailable").asBoolean()).isTrue();
+        String docId = docs.get(0).path("id").asText();
+        var content = mvc.perform(get("/api/v1/admin/partners/" + s.userId + "/documents/" + docId + "/content")
+                        .header("Authorization", "Bearer " + admin))
+                .andExpect(status().isOk()).andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.content().contentType("image/jpeg"))
+                .andReturn().getResponse().getContentAsByteArray();
+        assertThat(content).isEqualTo(JPEG);
+        mvc.perform(get("/api/v1/admin/partners/" + other.userId + "/documents/" + docId + "/content").header("Authorization", "Bearer " + admin))
+                .andExpect(status().isNotFound());                                  // a document id under the wrong partner
+        for (var outsider : List.of(s, other)) {                                    // the owner and everybody else: refused (HT-04)
+            mvc.perform(get("/api/v1/admin/partners/" + s.userId + "/documents").header("Authorization", "Bearer " + outsider.token))
+                    .andExpect(status().isForbidden());
+            mvc.perform(get("/api/v1/admin/partners/" + s.userId + "/documents/" + docId + "/content").header("Authorization", "Bearer " + outsider.token))
+                    .andExpect(status().isForbidden());
+        }
+        verifyPartner(s.userId);
+    }
+
     // ------------------------------------------------------------------ uploads & dashboard
 
     @Test
@@ -662,7 +717,7 @@ abstract class OrderFlowContract {
         var owner = loginNew();
         var profile = read(postJson("/api/v1/partner-registration", owner.token, Map.of("fullName", "Chủ tiệm A",
                 "partnerType", "SHOP", "shopName", "Tiệm A", "serviceCodes", List.of("tire-patch", "oil-change"),
-                "documents", List.of(Map.of("documentType", "ID_FRONT", "storageKey", "kyc/a/front.jpg"))))
+                "documents", kycDocuments(owner, "ID_FRONT", "ID_BACK", "SELFIE")))
                 .andExpect(status().isCreated()).andReturn());
         assertThat(profile.path("verificationStatus").asText()).isEqualTo("PENDING");
         String staffPhone = nextPhone();
@@ -820,9 +875,7 @@ abstract class OrderFlowContract {
         var s = loginNew();
         postJson("/api/v1/partner-registration", s.token, Map.of("fullName", "Thợ " + s.userId.substring(0, 4),
                 "partnerType", "INDIVIDUAL", "serviceCodes", List.of(serviceCode),
-                "documents", List.of(Map.of("documentType", "ID_FRONT", "storageKey", "kyc/front.jpg"),
-                        Map.of("documentType", "ID_BACK", "storageKey", "kyc/back.jpg"),
-                        Map.of("documentType", "SELFIE", "storageKey", "kyc/selfie.jpg"))))
+                "documents", kycDocuments(s, "ID_FRONT", "ID_BACK", "SELFIE")))
                 .andExpect(status().isCreated());
         return s;
     }
@@ -837,12 +890,27 @@ abstract class OrderFlowContract {
         return s;
     }
 
+    private static final byte[] JPEG = {(byte) 0xFF, (byte) 0xD8, (byte) 0xFF, (byte) 0xE0, 0, 0x10, 'J', 'F', 'I', 'F', 0, 1};
+
+    /** Uploads one image per document type through /uploads/kyc and returns the registration's "documents" array. */
+    List<Map<String, String>> kycDocuments(Session owner, String... types) throws Exception {
+        var docs = new java.util.ArrayList<Map<String, String>>();
+        for (String type : types) {
+            var uploaded = read(mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart("/api/v1/uploads/kyc")
+                            .file(new org.springframework.mock.web.MockMultipartFile("file", type + ".jpg", "image/jpeg", JPEG))
+                            .header("Authorization", "Bearer " + owner.token))
+                    .andExpect(status().isCreated()).andReturn());
+            docs.add(Map.of("documentType", type, "storageKey", uploaded.path("storageKey").asText()));
+        }
+        return docs;
+    }
+
     /** A registered, admin-approved SHOP owner. */
     Session approvedShop() throws Exception {
         var owner = loginNew();
         postJson("/api/v1/partner-registration", owner.token, Map.of("fullName", "Chủ tiệm", "partnerType", "SHOP",
                 "shopName", "Tiệm " + owner.userId.substring(0, 4), "serviceCodes", List.of("tire-patch"),
-                "documents", List.of(Map.of("documentType", "ID_FRONT", "storageKey", "kyc/shop/front.jpg"))))
+                "documents", kycDocuments(owner, "ID_FRONT", "ID_BACK", "SELFIE")))
                 .andExpect(status().isCreated());
         verifyPartner(owner.userId);
         return owner;

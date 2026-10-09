@@ -141,14 +141,27 @@ abstract class AdminApiContract {
 
     String adminToken() throws Exception { return login(ADMIN_PHONE).token; }
 
+    private static final byte[] JPEG = {(byte) 0xFF, (byte) 0xD8, (byte) 0xFF, (byte) 0xE0, 0, 0x10, 'J', 'F', 'I', 'F', 0, 1};
+
+    /** Uploads one image per document type through /uploads/kyc and returns the registration's "documents" array. */
+    List<Map<String, String>> kycDocuments(Session owner, String... types) throws Exception {
+        var docs = new java.util.ArrayList<Map<String, String>>();
+        for (String type : types) {
+            var uploaded = read(mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart("/api/v1/uploads/kyc")
+                            .file(new org.springframework.mock.web.MockMultipartFile("file", type + ".jpg", "image/jpeg", JPEG))
+                            .header("Authorization", "Bearer " + owner.token))
+                    .andExpect(status().isCreated()).andReturn());
+            docs.add(Map.of("documentType", type, "storageKey", uploaded.path("storageKey").asText()));
+        }
+        return docs;
+    }
+
     /** A phone that registered as a partner but is still PENDING KYC (3 documents uploaded). */
     Session registerPartner() throws Exception {
         var s = login(nextPhone());
         postJson("/api/v1/partner-registration", s.token, Map.of("fullName", "Tho " + s.userId.substring(0, 4),
                 "partnerType", "INDIVIDUAL", "serviceCodes", List.of("tire-patch"),
-                "documents", List.of(Map.of("documentType", "ID_FRONT", "storageKey", "kyc/front.jpg"),
-                        Map.of("documentType", "ID_BACK", "storageKey", "kyc/back.jpg"),
-                        Map.of("documentType", "SELFIE", "storageKey", "kyc/selfie.jpg"))))
+                "documents", kycDocuments(s, "ID_FRONT", "ID_BACK", "SELFIE")))
                 .andExpect(status().isCreated());
         return s;
     }
