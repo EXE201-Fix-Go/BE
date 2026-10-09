@@ -8,4 +8,7 @@ import java.time.Duration;
 @Validated
 @ConfigurationProperties("fixgo.dispatch")
 public record DispatchProperties(@NotNull Duration pendingConfirmationTtl, boolean schedulerEnabled,
-                                 long schedulerIntervalMs) { }
+                                 long schedulerIntervalMs, Duration locationMaxAge) {
+    /** Partners whose last position is older than this are not offered orders. Null or zero = no limit. */
+    public boolean hasLocationLimit() { return locationMaxAge != null && !locationMaxAge.isZero() && !locationMaxAge.isNegative(); }
+}

@@ -27,7 +27,9 @@ import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.List;
@@ -49,13 +51,15 @@ public class DispatchService {
     private final OrderStateMachine stateMachine;
     private final DispatchProperties properties;
     private final TravelFeeConfigRepository travelFees;
+    private final TransactionTemplate tx;
     private final Clock clock;
 
     public DispatchService(DispatchRoundRepository rounds, OrderAssignmentRepository assignments,
                            DispatchPolicyRepository policies, PartnerProfileRepository partners,
                            RescueOrderRepository orders, ServiceCatalogCache catalog,
                            OrderStateMachine stateMachine, DispatchProperties properties,
-                           TravelFeeConfigRepository travelFees, Clock clock) {
+                           TravelFeeConfigRepository travelFees, PlatformTransactionManager transactionManager,
+                           Clock clock) {
         this.rounds = rounds;
         this.assignments = assignments;
         this.policies = policies;
@@ -65,6 +69,7 @@ public class DispatchService {
         this.stateMachine = stateMachine;
         this.properties = properties;
         this.travelFees = travelFees;
+        this.tx = new TransactionTemplate(transactionManager);
         this.clock = clock;
     }
 
@@ -74,16 +79,39 @@ public class DispatchService {
      */
     @Transactional(propagation = Propagation.MANDATORY)
     public void startRound(RescueOrder order, int roundNo) {
+        openRound(order, roundNo, roundNo);
+    }
+
+    /**
+     * Puts an order back in front of partners after the partner who accepted it withdrew (caller holds the order
+     * lock, order already moved back to REQUESTED). A new round is numbered after the last one (UNIQUE per order)
+     * and reuses the radius of the policy the order was last dispatched with.
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void redispatch(RescueOrder order) {
+        var last = rounds.findFirstByOrderIdOrderByRoundNoDesc(order.getId()).orElse(null);
+        int seq = last == null ? 1 : last.getRoundNo() + 1;
+        var policy = last == null ? null : policies.findById(last.getPolicyId()).orElse(null);
+        openRound(order, seq, policy == null ? 1 : policy.getRoundNo());
+    }
+
+    /**
+     * {@code seq} numbers the dispatch_rounds row (unique per order); {@code policyRoundNo} picks the radius and
+     * timeout. They only differ after a withdrawal, when the order is dispatched again.
+     */
+    private void openRound(RescueOrder order, int seq, int policyRoundNo) {
         var now = clock.instant();
-        var policy = policies.findActiveGlobalRound(roundNo, now).orElse(null);
+        int roundNo = seq;
+        var policy = policies.findActiveGlobalRound(policyRoundNo, now).orElse(null);
         if (policy == null) {
             // No policy for this round means the previous one was effectively final (RB-26 misconfiguration guard).
-            log.warn("No dispatch policy for round {} — closing order {} as NO_PARTNER_FOUND", roundNo, order.getOrderCode());
+            log.warn("No dispatch policy for round {} — closing order {} as NO_PARTNER_FOUND", policyRoundNo, order.getOrderCode());
             stateMachine.transition(order, OrderStatus.NO_PARTNER_FOUND, null, ActorType.SYSTEM, "No dispatch policy");
             return;
         }
+        var minLocationAt = properties.hasLocationLimit() ? now.minus(properties.locationMaxAge()) : java.time.Instant.EPOCH;
         List<UUID> candidates = partners.findCandidates(order.getPickupLat(), order.getPickupLng(), policy.getRadiusM(),
-                order.getRequestedServiceId(), policy.isIncludeLowerPriority());
+                order.getRequestedServiceId(), policy.isIncludeLowerPriority(), order.getId(), minLocationAt);
         var expiresAt = now.plus(Duration.ofSeconds(policy.getTimeoutSeconds()));
         var round = rounds.save(new DispatchRound(order.getId(), policy.getId(), roundNo, policy.getRadiusM(), now,
                 expiresAt, candidates.size(), candidates.isEmpty() ? noCandidateReason(order, policy) : null));
@@ -95,7 +123,7 @@ public class DispatchService {
                 stateMachine.transition(order, OrderStatus.NO_PARTNER_FOUND, null, ActorType.SYSTEM,
                         "Round " + roundNo + ": no candidates");     // RB-34
             } else {
-                startRound(order, roundNo + 1);                        // BR08: widen immediately, nobody to wait for
+                openRound(order, seq + 1, policyRoundNo + 1);          // BR08: widen immediately, nobody to wait for
             }
             return;
         }
@@ -236,32 +264,50 @@ public class DispatchService {
     /**
      * Housekeeping: rounds past their deadline widen to the next radius or end as NO_PARTNER_FOUND;
      * orders never confirmed by the customer expire (RB-27 / §7.1).
+     * Every round/order is handled in its own transaction, so one that fails (and is logged) cannot roll back or
+     * block the others, and is retried on the next tick.
      */
-    @Transactional
     public void tick() {
         var now = clock.instant();
         for (UUID roundId : rounds.findExpiredOpenIds(now)) {
-            var round = rounds.lockById(roundId).orElse(null);
-            if (round == null || !round.isOpen()) continue;
-            var order = orders.lockById(round.getOrderId()).orElse(null);
-            round.end(DispatchRound.EndReason.TIMEOUT, now);
-            log.info("dispatch.timeout orderId={} round={}", round.getOrderId(), round.getRoundNo());
-            assignments.findByDispatchRoundId(round.getId()).forEach(a -> a.expire(now));
-            if (order == null || order.getStatus() != OrderStatus.REQUESTED) continue;
-            var policy = policies.findById(round.getPolicyId()).orElse(null);
-            if (policy == null || policy.isFinalRound()) {
-                stateMachine.transition(order, OrderStatus.NO_PARTNER_FOUND, null, ActorType.SYSTEM,
-                        "Round " + round.getRoundNo() + " timed out");
-            } else {
-                startRound(order, round.getRoundNo() + 1);
+            try {
+                tx.executeWithoutResult(status -> expireRound(roundId, now));
+            } catch (RuntimeException ex) {
+                log.error("dispatch.tick failed for round {}", roundId, ex);
             }
         }
         var cutoff = now.minus(properties.pendingConfirmationTtl());
         for (var stale : orders.findByStatusCreatedBefore(OrderStatus.PENDING_CONFIRMATION, cutoff)) {
-            var order = orders.lockById(stale.getId()).orElse(null);
-            if (order != null && order.getStatus() == OrderStatus.PENDING_CONFIRMATION) {
-                stateMachine.transition(order, OrderStatus.EXPIRED, null, ActorType.SYSTEM, "Call-out fee never confirmed");
+            UUID orderId = stale.getId();
+            try {
+                tx.executeWithoutResult(status -> expireUnconfirmed(orderId));
+            } catch (RuntimeException ex) {
+                log.error("dispatch.tick failed for order {}", orderId, ex);
             }
+        }
+    }
+
+    private void expireRound(UUID roundId, java.time.Instant now) {
+        var round = rounds.lockById(roundId).orElse(null);
+        if (round == null || !round.isOpen()) return;
+        var order = orders.lockById(round.getOrderId()).orElse(null);
+        round.end(DispatchRound.EndReason.TIMEOUT, now);
+        log.info("dispatch.timeout orderId={} round={}", round.getOrderId(), round.getRoundNo());
+        assignments.findByDispatchRoundId(round.getId()).forEach(a -> a.expire(now));
+        if (order == null || order.getStatus() != OrderStatus.REQUESTED) return;
+        var policy = policies.findById(round.getPolicyId()).orElse(null);
+        if (policy == null || policy.isFinalRound()) {
+            stateMachine.transition(order, OrderStatus.NO_PARTNER_FOUND, null, ActorType.SYSTEM,
+                    "Round " + round.getRoundNo() + " timed out");
+        } else {
+            openRound(order, round.getRoundNo() + 1, policy.getRoundNo() + 1);
+        }
+    }
+
+    private void expireUnconfirmed(UUID orderId) {
+        var order = orders.lockById(orderId).orElse(null);
+        if (order != null && order.getStatus() == OrderStatus.PENDING_CONFIRMATION) {
+            stateMachine.transition(order, OrderStatus.EXPIRED, null, ActorType.SYSTEM, "Call-out fee never confirmed");
         }
     }
 

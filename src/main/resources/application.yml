@@ -63,6 +63,9 @@ fixgo:
     pending-confirmation-ttl: 10m
     scheduler-enabled: ${DISPATCH_SCHEDULER:true}
     scheduler-interval-ms: 5000
+    # Ignore partners whose last position is older than this (e.g. PT10M). 0s = no limit; turn it on once the
+    # partner apps send their position periodically, otherwise idle-but-online partners stop matching.
+    location-max-age: ${DISPATCH_LOCATION_MAX_AGE:0s}
   catalog:
     # Comma-separated service codes hidden from customers and partners. Towing waits for the hand-over flow (BR04/BR05).
     disabled-codes: ${DISABLED_SERVICE_CODES:towing}
