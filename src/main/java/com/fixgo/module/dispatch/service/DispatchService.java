@@ -132,13 +132,27 @@ public class DispatchService {
     @Transactional(readOnly = true)
     public List<DispatchDtos.OfferResponse> listOffers(Actor partner) {
         var now = clock.instant();
-        List<OrderAssignment> list = assignments
-                .findByPartnerIdAndStatusOrderByOfferedAtDesc(partner.userId(), OrderAssignment.Status.OFFERED)
-                .stream().filter(a -> a.isOpenOffer(now)).toList();
-        // Batch-load orders and rounds in 2 IN queries instead of N×2 individual findById calls.
-        Map<UUID, RescueOrder> orderMap = batchLoadOrders(list);
-        Map<UUID, DispatchRound> roundMap = batchLoadRounds(list);
-        return list.stream()
+
+        // 1. Lấy TẤT CẢ đơn đã từng được phân cho thợ này
+        List<OrderAssignment> allAssignments = assignments
+                .findByPartnerIdAndStatusOrderByOfferedAtDesc(partner.userId(), OrderAssignment.Status.OFFERED);
+
+        // 2. Lọc ra những đơn chưa hết hạn
+        List<OrderAssignment> validList = allAssignments.stream().filter(a -> a.isOpenOffer(now)).toList();
+
+        // IN LOG KIỂM TRA
+        log.info("Thợ [{}] gọi listOffers: Tổng {} đơn được giao, {} đơn còn hạn.",
+                partner.userId(), allAssignments.size(), validList.size());
+
+        if (!allAssignments.isEmpty() && validList.isEmpty()) {
+            log.warn("⚠️ Đơn đã bị thu hồi ngay lập tức! Kiểm tra lại timeout policy. expiresAt: {}, now: {}",
+                    allAssignments.get(0).getExpiresAt(), now);
+        }
+
+        Map<UUID, RescueOrder> orderMap = batchLoadOrders(validList);
+        Map<UUID, DispatchRound> roundMap = batchLoadRounds(validList);
+
+        return validList.stream()
                 .map(a -> toOfferBatch(a, orderMap, roundMap))
                 .filter(o -> o != null && o.orderStatus() == OrderStatus.REQUESTED)
                 .toList();
