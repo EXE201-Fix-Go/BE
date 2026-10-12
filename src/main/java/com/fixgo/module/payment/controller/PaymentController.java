@@ -14,20 +14,15 @@ import java.util.UUID;
 @RestController
 @RequestMapping("/api/v1/orders/{orderId}/payment")
 public class PaymentController {
-    private final PaymentService payments;
     private final OrderService orders;
 
-    public PaymentController(PaymentService payments, OrderService orders) {
-        this.payments = payments;
+    public PaymentController(OrderService orders) {
         this.orders = orders;
     }
 
-    /** "Đã thanh toán" — visibility of the order doubles as the permission check (customer, partner or admin). */
+    /** "Đã thanh toán" — the permission check and the write share one transaction in the service (NT-02). */
     @PostMapping("/confirm")
     public OrderDtos.OrderResponse confirm(Authentication auth, @PathVariable UUID orderId) {
-        var actor = Actor.of(auth);
-        orders.get(actor, orderId);
-        payments.confirm(actor, orderId);
-        return orders.get(actor, orderId);
+        return orders.confirmPayment(Actor.of(auth), orderId);
     }
 }

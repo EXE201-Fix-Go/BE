@@ -23,6 +23,9 @@ public interface RescueOrderRepository extends JpaRepository<RescueOrder, UUID> 
 
     List<RescueOrder> findByCustomerIdOrderByCreatedAtDesc(UUID customerId);
 
+    @Query("select count(o) > 0 from RescueOrder o where o.customerId = :customerId and o.status in :openStatuses")
+    boolean existsOpenOrderOf(UUID customerId, java.util.Collection<OrderStatus> openStatuses);
+
     @Query("select o from RescueOrder o where o.status = :status and o.createdAt < :before")
     List<RescueOrder> findByStatusCreatedBefore(OrderStatus status, Instant before);
 

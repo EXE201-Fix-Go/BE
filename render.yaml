@@ -1,0 +1,57 @@
+# Render Blueprint cho backend Fix&Go. Xem docs/deploy.md (danh sách biến, cách kiểm sau khi deploy).
+# `sync: false` = Render hỏi giá trị lúc tạo dịch vụ, không lưu trong git.
+services:
+  - type: web
+    name: fixgo-be
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    region: singapore            # gần Supabase ap-southeast-1
+    plan: starter                # 512 MB; gói free ngủ sau 15 phút không dùng nên KHÔNG hợp để chạy thật
+    healthCheckPath: /api/v1/ping
+    autoDeploy: false            # deploy tay sau khi CI xanh và đã xem PR
+    envVars:
+      - key: SPRING_PROFILES_ACTIVE
+        value: prod              # bật ProductionSafetyCheck: từ chối khởi động nếu cấu hình còn kiểu dev
+      # --- Database (Supabase Postgres, qua pooler) ---
+      - key: DB_URL
+        sync: false              # jdbc:postgresql://aws-0-ap-southeast-1.pooler.supabase.com:5432/postgres?sslmode=require
+      - key: DB_USERNAME
+        sync: false
+      - key: DB_PASSWORD
+        sync: false
+      - key: DB_SCHEMA
+        sync: false              # schema riêng của backend này (Flyway tự tạo/migrate). Xem docs/deploy.md §2
+      - key: DB_POOL_SIZE
+        value: "8"
+      # --- Đăng nhập ---
+      - key: JWT_SECRET
+        sync: false              # Base64 của >= 32 byte ngẫu nhiên: node -e "console.log(require('crypto').randomBytes(48).toString('base64'))". Đổi giá trị = đăng xuất mọi người
+      - key: OTP_DEV_ECHO
+        value: "false"           # BẮT BUỘC false: true sẽ trả mã OTP ngay trong API
+      - key: TRUSTED_PROXY_HOPS
+        value: "1"               # số proxy của Render đứng trước app; PHẢI kiểm lại sau lần deploy đầu (docs/deploy.md §5)
+      - key: BOOTSTRAP_ADMIN_PHONE
+        sync: false              # SĐT của admin đầu tiên (đăng nhập bằng OTP)
+      # --- SMS (eSMS.vn) ---
+      - key: SMS_PROVIDER
+        value: esms
+      - key: ESMS_API_KEY
+        sync: false
+      - key: ESMS_SECRET_KEY
+        sync: false
+      - key: ESMS_BRANDNAME
+        sync: false
+      # --- Lưu ảnh (Supabase Storage) ---
+      - key: STORAGE_PROVIDER
+        value: supabase
+      - key: SUPABASE_URL
+        sync: false              # https://<project-ref>.supabase.co
+      - key: SUPABASE_SERVICE_KEY
+        sync: false              # service-role key: chỉ ở đây, tuyệt đối không đưa vào FE/Mobile
+      # --- Web & vận hành ---
+      - key: CORS_ALLOWED_ORIGINS
+        sync: false              # vd https://app.fixgo.vn (nhiều origin cách nhau bằng dấu phẩy; không localhost)
+      - key: DISPATCH_LOCATION_MAX_AGE
+        value: 5m                # bỏ qua thợ có vị trí cũ hơn 5 phút (app thợ gửi vị trí mỗi 60 giây)
+      - key: DISABLED_SERVICE_CODES
+        value: towing            # kéo xe chờ luồng bàn giao (BR04/BR05)

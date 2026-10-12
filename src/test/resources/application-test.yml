@@ -23,6 +23,8 @@ fixgo:
     otp-dev-echo: true
     otp-max-per-target-per-hour: 50
     otp-max-per-ip-per-hour: 1000
+  catalog:
+    disabled-codes: ""          # the dispatch-radius test dispatches a towing order
   dispatch:
     scheduler-enabled: false
     pending-confirmation-ttl: 10m

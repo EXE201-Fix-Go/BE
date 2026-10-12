@@ -2,7 +2,9 @@ package com.fixgo.module.catalog.service;
 
 import com.fixgo.module.catalog.entity.ServiceCatalog;
 import com.fixgo.module.catalog.repository.ServiceCatalogRepository;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
+import java.util.Set;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Collection;
@@ -21,9 +23,17 @@ import java.util.stream.Collectors;
 public class ServiceCatalogCache {
     private static final Duration TTL = Duration.ofMinutes(5);
     private final ServiceCatalogRepository repository;
+    /** Codes switched off by configuration (pilot: towing needs the hand-over flow of BR04/BR05 first). */
+    private final Set<String> disabledCodes;
     private volatile Snapshot snapshot;
 
-    public ServiceCatalogCache(ServiceCatalogRepository repository) { this.repository = repository; }
+    public ServiceCatalogCache(ServiceCatalogRepository repository,
+                               @Value("${fixgo.catalog.disabled-codes:}") List<String> disabledCodes) {
+        this.repository = repository;
+        this.disabledCodes = disabledCodes.stream().map(String::strip).filter(c -> !c.isEmpty()).collect(Collectors.toSet());
+    }
+
+    private boolean enabled(ServiceCatalog s) { return s.isActive() && !disabledCodes.contains(s.getCode()); }
 
     private record Snapshot(List<ServiceCatalog> all, Map<UUID, ServiceCatalog> byId, Map<String, ServiceCatalog> byCode,
                             Instant loadedAt) { }
@@ -42,19 +52,19 @@ public class ServiceCatalogCache {
     public void invalidate() { snapshot = null; }
 
     public List<ServiceCatalog> active() {
-        return current().all().stream().filter(ServiceCatalog::isActive)
+        return current().all().stream().filter(this::enabled)
                 .sorted((a, b) -> Integer.compare(a.getSortOrder(), b.getSortOrder())).toList();
     }
 
     public Optional<ServiceCatalog> byId(UUID id) { return Optional.ofNullable(current().byId().get(id)); }
 
     public Optional<ServiceCatalog> activeByCode(String code) {
-        return Optional.ofNullable(current().byCode().get(code)).filter(ServiceCatalog::isActive);
+        return Optional.ofNullable(current().byCode().get(code)).filter(this::enabled);
     }
 
     public List<ServiceCatalog> activeByCodes(Collection<String> codes) {
         var map = current().byCode();
-        return codes.stream().distinct().map(map::get).filter(s -> s != null && s.isActive()).toList();
+        return codes.stream().distinct().map(map::get).filter(s -> s != null && enabled(s)).toList();
     }
 
     public Map<UUID, ServiceCatalog> byIds(Collection<UUID> ids) {

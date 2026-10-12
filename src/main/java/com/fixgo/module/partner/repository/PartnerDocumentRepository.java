@@ -12,4 +12,6 @@ import java.util.UUID;
 
 public interface PartnerDocumentRepository extends JpaRepository<PartnerDocument, UUID> {
     List<PartnerDocument> findByPartnerIdOrderByCreatedAtAsc(UUID partnerId);
+
+    void deleteByPartnerId(UUID partnerId);
 }

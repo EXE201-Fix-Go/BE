@@ -75,13 +75,13 @@ public class SecurityConfig {
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(HttpMethod.POST, "/api/v1/auth/otp", "/api/v1/auth/otp/verify",
                                 "/api/v1/auth/refresh").permitAll()
-                        .requestMatchers(HttpMethod.GET, "/api/v1/services", "/uploads/**", "/api/v1/ping").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/v1/services", "/api/v1/pricing", "/uploads/**", "/api/v1/ping").permitAll()
                         .requestMatchers(HttpMethod.HEAD, "/api/v1/ping").permitAll()
-                        .requestMatchers(HttpMethod.POST, "/api/v1/uploads").authenticated()
+                        .requestMatchers(HttpMethod.POST, "/api/v1/uploads", "/api/v1/uploads/kyc").authenticated()
                         .requestMatchers("/api/v1/admin/**").hasRole("ADMIN")
                         .requestMatchers("/api/v1/partner/**").hasRole("PARTNER")
                         .requestMatchers("/api/v1/orders/**", "/api/v1/users/me", "/api/v1/users/me/**",
-                                "/api/v1/partner-registration", "/api/v1/auth/logout", "/api/v1/auth/logout-all")
+                                "/api/v1/partner-registration", "/api/v1/invitations/**", "/api/v1/auth/logout", "/api/v1/auth/logout-all")
                             .authenticated()
                         .anyRequest().denyAll())
                 .exceptionHandling(handler -> handler.authenticationEntryPoint(errors).accessDeniedHandler(errors))

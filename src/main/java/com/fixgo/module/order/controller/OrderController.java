@@ -48,6 +48,14 @@ public class OrderController {
         return orders.cancel(Actor.of(auth), id, request == null ? "Cancelled by user" : request.reason());
     }
 
+    /** The accepted partner backs out before arriving; the order is re-dispatched to other partners. */
+    @PostMapping("/{id}/withdraw")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void withdraw(Authentication auth, @PathVariable UUID id,
+                         @Valid @RequestBody(required = false) OrderDtos.CancelRequest request) {
+        orders.withdraw(Actor.of(auth), id, request == null ? null : request.reason());
+    }
+
     @PostMapping("/{id}/arrive")
     public OrderDtos.OrderResponse arrive(Authentication auth, @PathVariable UUID id) { return orders.arrive(Actor.of(auth), id); }
 

@@ -47,4 +47,7 @@ public class PartnerDocument {
     public UUID getId() { return id; }
     public String getDocumentType() { return documentType; }
     public String getReviewStatus() { return reviewStatus; }
+    public UUID getPartnerId() { return partnerId; }
+    public String getStorageKey() { return storageKey; }
+    public Instant getCreatedAt() { return createdAt; }
 }

@@ -14,6 +14,7 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import com.fixgo.module.dispatch.repository.OrderAssignmentRepository;
 import java.time.Clock;
 import java.util.List;
 import java.util.UUID;
@@ -23,12 +24,15 @@ public class AdminUserService {
     private final UserRepository users;
     private final UserService userService;
     private final UserDeviceRepository devices;
+    private final OrderAssignmentRepository assignments;
     private final Clock clock;
 
-    public AdminUserService(UserRepository users, UserService userService, UserDeviceRepository devices, Clock clock) {
+    public AdminUserService(UserRepository users, UserService userService, UserDeviceRepository devices,
+                            OrderAssignmentRepository assignments, Clock clock) {
         this.users = users;
         this.userService = userService;
         this.devices = devices;
+        this.assignments = assignments;
         this.clock = clock;
     }
 
@@ -50,6 +54,11 @@ public class AdminUserService {
         var user = users.lockById(id).orElseThrow(UserService::notFound);
         if (user.getRole() == Role.ADMIN) {
             throw new ApiException(HttpStatus.CONFLICT, "ADMIN_ACCOUNT_PROTECTED", "Admin accounts cannot be changed here.");
+        }
+        if (status == AccountStatus.LOCKED && user.getRole() == Role.PARTNER && assignments.hasActiveJob(id)) {
+            // Locking would strand the customer: the admin must cancel or hand over the open order first.
+            throw new ApiException(HttpStatus.CONFLICT, "PARTNER_HAS_ACTIVE_JOB",
+                    "This partner has an open order. Cancel or reassign it before locking the account.");
         }
         if (user.getStatus() != status) {
             user.changeStatus(status);

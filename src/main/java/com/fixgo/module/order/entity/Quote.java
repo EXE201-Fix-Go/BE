@@ -107,6 +107,9 @@ public class Quote {
         status = Status.DECLINED; decidedBy = by; decidedAt = now; declineReason = reason;
     }
     public void supersede() { status = Status.SUPERSEDED; }
+    /** S12: a quote past its validity can no longer be approved or declined. */
+    public boolean isExpired(Instant now) { return validUntil != null && !validUntil.isAfter(now); }
+    public void expire() { status = Status.EXPIRED; }
 
     public UUID getId() { return id; }
     public UUID getOrderId() { return orderId; }
