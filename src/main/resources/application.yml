@@ -1,4 +1,4 @@
-﻿spring:
+spring:
   application:
     name: fixgo-backend
   lifecycle:
@@ -104,3 +104,7 @@ fixgo:
   bootstrap-admin:
     phone: ${BOOTSTRAP_ADMIN_PHONE:}
     full-name: ${BOOTSTRAP_ADMIN_NAME:FixGo Admin}
+  demo-bot:
+    enabled: ${DEMO_BOT_ENABLED:true}
+    delay-seconds: ${DEMO_BOT_DELAY_SECONDS:20}
+

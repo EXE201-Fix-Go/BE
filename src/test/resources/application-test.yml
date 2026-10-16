@@ -31,3 +31,7 @@ fixgo:
   bootstrap-admin:
     phone: "+84900000009"
     full-name: Test Admin
+  demo-bot:
+    enabled: false
+    delay-seconds: 20
+
