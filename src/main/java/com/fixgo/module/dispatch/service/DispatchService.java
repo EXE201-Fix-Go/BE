@@ -19,11 +19,13 @@ import com.fixgo.module.order.enums.*;
 import com.fixgo.module.order.dto.*;
 import com.fixgo.module.order.service.*;
 import com.fixgo.module.order.repository.*;
+import com.fixgo.module.demobot.service.DemoBotService;
 import com.fixgo.module.partner.enums.Availability;
 import com.fixgo.module.partner.entity.PartnerProfile;
 import com.fixgo.module.partner.repository.PartnerProfileRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
@@ -51,6 +53,7 @@ public class DispatchService {
     private final OrderStateMachine stateMachine;
     private final DispatchProperties properties;
     private final TravelFeeConfigRepository travelFees;
+    private final DemoBotService demoBot;
     private final TransactionTemplate tx;
     private final Clock clock;
 
@@ -58,7 +61,8 @@ public class DispatchService {
                            DispatchPolicyRepository policies, PartnerProfileRepository partners,
                            RescueOrderRepository orders, ServiceCatalogCache catalog,
                            OrderStateMachine stateMachine, DispatchProperties properties,
-                           TravelFeeConfigRepository travelFees, PlatformTransactionManager transactionManager,
+                           TravelFeeConfigRepository travelFees, @Lazy DemoBotService demoBot,
+                           PlatformTransactionManager transactionManager,
                            Clock clock) {
         this.rounds = rounds;
         this.assignments = assignments;
@@ -69,6 +73,7 @@ public class DispatchService {
         this.stateMachine = stateMachine;
         this.properties = properties;
         this.travelFees = travelFees;
+        this.demoBot = demoBot;
         this.tx = new TransactionTemplate(transactionManager);
         this.clock = clock;
     }
@@ -110,8 +115,12 @@ public class DispatchService {
             return;
         }
         var minLocationAt = properties.hasLocationLimit() ? now.minus(properties.locationMaxAge()) : java.time.Instant.EPOCH;
+        UUID botId = demoBot != null ? demoBot.getBotUserId() : null;
         List<UUID> candidates = partners.findCandidates(order.getPickupLat(), order.getPickupLng(), policy.getRadiusM(),
-                order.getRequestedServiceId(), policy.isIncludeLowerPriority(), order.getId(), minLocationAt);
+                order.getRequestedServiceId(), policy.isIncludeLowerPriority(), order.getId(), minLocationAt)
+                .stream()
+                .filter(id -> botId == null || !id.equals(botId))
+                .toList();
         var expiresAt = now.plus(Duration.ofSeconds(policy.getTimeoutSeconds()));
         var round = rounds.save(new DispatchRound(order.getId(), policy.getId(), roundNo, policy.getRadiusM(), now,
                 expiresAt, candidates.size(), candidates.isEmpty() ? noCandidateReason(order, policy) : null));
@@ -120,6 +129,11 @@ public class DispatchService {
         if (candidates.isEmpty()) {
             round.end(DispatchRound.EndReason.NO_CANDIDATE, now);
             if (policy.isFinalRound()) {
+                if (demoBot != null && demoBot.isEnabled()) {
+                    log.info("dispatch.demo-bot-standby code={} no real candidates in round {}, holding order in REQUESTED for Demo Bot",
+                            order.getOrderCode(), roundNo);
+                    return;
+                }
                 stateMachine.transition(order, OrderStatus.NO_PARTNER_FOUND, null, ActorType.SYSTEM,
                         "Round " + roundNo + ": no candidates");     // RB-34
             } else {

@@ -15,7 +15,9 @@ import com.fixgo.module.order.enums.*;
 import com.fixgo.module.order.dto.*;
 import com.fixgo.module.order.service.*;
 import com.fixgo.module.order.repository.*;
+import com.fixgo.module.demobot.service.DemoBotService;
 import com.fixgo.module.iam.enums.Role;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -34,16 +36,19 @@ public class QuoteService {
     private final OrderService orderService;
     private final OrderStateMachine stateMachine;
     private final QuoteMapper mapper;
+    private final DemoBotService demoBot;
     private final Clock clock;
 
     public QuoteService(QuoteRepository quotes, RescueOrderRepository orders, ServiceCatalogCache catalog,
-                        OrderService orderService, OrderStateMachine stateMachine, QuoteMapper mapper, Clock clock) {
+                        OrderService orderService, OrderStateMachine stateMachine, QuoteMapper mapper,
+                        @Lazy DemoBotService demoBot, Clock clock) {
         this.quotes = quotes;
         this.orders = orders;
         this.catalog = catalog;
         this.orderService = orderService;
         this.stateMachine = stateMachine;
         this.mapper = mapper;
+        this.demoBot = demoBot;
         this.clock = clock;
     }
 
@@ -126,6 +131,9 @@ public class QuoteService {
             stateMachine.transition(order, OrderStatus.IN_PROGRESS, actor.userId(), ActorType.CUSTOMER, "Additional quote approved");
         } else {
             throw OrderStateMachine.wrongState(order.getStatus(), "approve a quote for");
+        }
+        if (demoBot != null) {
+            demoBot.onQuoteApproved(orderId);
         }
         return mapper.toResponse(quote);
     }

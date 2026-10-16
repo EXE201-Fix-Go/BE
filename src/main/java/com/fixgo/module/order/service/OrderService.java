@@ -12,6 +12,7 @@ import com.fixgo.shared.util.Actor;
 import com.fixgo.shared.exception.ApiException;
 import com.fixgo.shared.util.PhoneNumbers;
 import com.fixgo.module.pricing.repository.CallOutFeeConfigRepository;
+import com.fixgo.module.demobot.service.DemoBotService;
 import com.fixgo.module.dispatch.entity.DispatchRound;
 import com.fixgo.module.dispatch.service.DispatchService;
 import com.fixgo.module.dispatch.entity.OrderAssignment;
@@ -26,6 +27,7 @@ import com.fixgo.module.iam.enums.Role;
 import com.fixgo.module.iam.repository.UserIdentityRepository;
 import com.fixgo.module.iam.repository.UserRepository;
 import com.fixgo.module.iam.service.UserService;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -56,13 +58,15 @@ public class OrderService {
     private final DispatchService dispatch;
     private final PaymentService payments;
     private final OrderStateMachine stateMachine;
+    private final DemoBotService demoBot;
     private final Clock clock;
 
     public OrderService(RescueOrderRepository orders, OrderStatusHistoryRepository history,
                         OrderAssignmentRepository assignments, ServiceCatalogCache catalog,
                         CallOutFeeConfigRepository feeConfigs, PartnerProfileRepository partners, UserRepository users,
                         UserIdentityRepository identities, QuoteRepository quotes, QuoteMapper quoteMapper,
-                        DispatchService dispatch, PaymentService payments, OrderStateMachine stateMachine, Clock clock) {
+                        DispatchService dispatch, PaymentService payments, OrderStateMachine stateMachine,
+                        @Lazy DemoBotService demoBot, Clock clock) {
         this.orders = orders;
         this.history = history;
         this.assignments = assignments;
@@ -76,6 +80,7 @@ public class OrderService {
         this.dispatch = dispatch;
         this.payments = payments;
         this.stateMachine = stateMachine;
+        this.demoBot = demoBot;
         this.clock = clock;
     }
 
@@ -123,6 +128,9 @@ public class OrderService {
         order.confirmCallOutFee(clock.instant());
         stateMachine.transition(order, OrderStatus.REQUESTED, actor.userId(), ActorType.CUSTOMER, "Call-out fee confirmed");
         dispatch.startRound(order, 1);
+        if (demoBot != null) {
+            demoBot.onOrderConfirmed(order.getId());
+        }
         return toSimpleResponse(order);
     }
 
@@ -176,6 +184,9 @@ public class OrderService {
         stateMachine.transition(order, OrderStatus.CANCELLED, actor.userId(), source, reason);
         order.recordCancellation(actor.userId(), source, reason, now);
         dispatch.closeOpenRounds(order.getId(), DispatchRound.EndReason.CANCELLED);
+        if (demoBot != null) {
+            demoBot.onOrderCancelled(order.getId());
+        }
         var current = dispatch.currentAssignment(order.getId()).orElse(null);
         if (current != null) {
             current.end(now);
