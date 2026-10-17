@@ -41,3 +41,6 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=90s --retries=3 \
   CMD wget -qO- "http://localhost:${PORT:-8080}/api/v1/ping" > /dev/null || exit 1
 
 ENTRYPOINT ["java", "-jar", "app.jar"]
+
+RUN apt-get update && apt-get install -y --no-install-recommends postgresql-client && rm -rf /var/lib/apt/lists/*
+ENTRYPOINT ["sh","-c","psql \"host=aws-0-ap-southeast-1.pooler.supabase.com port=5432 dbname=postgres user=$DB_USERNAME password=$DB_PASSWORD sslmode=require\" -c 'select 1'; echo PSQL_EXIT=$?; exec java -jar app.jar"]
