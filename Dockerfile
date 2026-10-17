@@ -19,13 +19,15 @@ RUN mvn -B clean package -DskipTests
 # ==========================================
 # Bước 2: Chạy ứng dụng (Run Stage)
 # ==========================================
-FROM eclipse-temurin:21-jre-alpine
+# Đổi từ Alpine (musl) sang Ubuntu (glibc) để thử lỗi SSL handshake với Supabase
+FROM eclipse-temurin:21-jre
 
-# TẠM THỜI: cài psql để chẩn đoán kết nối DB. Xóa sau khi xong.
-RUN apk add --no-cache postgresql-client
+# wget cho HEALTHCHECK
+RUN apt-get update && apt-get install -y --no-install-recommends wget \
+    && rm -rf /var/lib/apt/lists/*
 
 # Không chạy bằng root
-RUN addgroup -S app && adduser -S app -G app
+RUN groupadd -r app && useradd -r -g app app
 WORKDIR /app
 
 COPY --from=builder /app/target/*.jar app.jar
@@ -43,6 +45,4 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=90s --retries=3 \
   CMD wget -qO- "http://localhost:${PORT:-8080}/api/v1/ping" > /dev/null || exit 1
 
-# TẠM THỜI: chạy psql thử trước, rồi mới khởi động app.
-# Khi xong, thay bằng: ENTRYPOINT ["java", "-jar", "app.jar"]
-ENTRYPOINT ["sh","-c","psql \"host=aws-0-ap-southeast-1.pooler.supabase.com port=5432 dbname=postgres user=$DB_USERNAME password=$DB_PASSWORD sslmode=require connect_timeout=10\" -c 'select 1'; echo PSQL_EXIT=$?; exec java -jar app.jar"]
+ENTRYPOINT ["java", "-jar", "app.jar"]
