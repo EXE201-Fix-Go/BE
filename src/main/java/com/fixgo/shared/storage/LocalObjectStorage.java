@@ -14,6 +14,7 @@ import java.util.Optional;
 @Component
 @ConditionalOnProperty(name = "fixgo.storage.provider", havingValue = "local", matchIfMissing = true)
 public class LocalObjectStorage implements ObjectStorage {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(LocalObjectStorage.class);
     private final Path publicDir;
     private final Path privateDir;
     private final String publicBaseUrl;
@@ -31,6 +32,7 @@ public class LocalObjectStorage implements ObjectStorage {
             Files.createDirectories(target.getParent());
             Files.write(target, bytes);
         } catch (IOException ex) {
+            log.error("storage.local write failed key={} path={}: {}", key, resolve(visibility, key), ex.toString());
             throw new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "STORAGE_FAILED", "Could not store the file.");
         }
     }
@@ -42,6 +44,7 @@ public class LocalObjectStorage implements ObjectStorage {
             if (!Files.isRegularFile(file)) return Optional.empty();
             return Optional.of(new StoredObject(Files.readAllBytes(file), StorageKeys.contentTypeOf(key)));
         } catch (IOException ex) {
+            log.error("storage.local read failed key={}: {}", key, ex.toString());
             throw new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "STORAGE_FAILED", "Could not read the file.");
         }
     }

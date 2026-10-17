@@ -75,6 +75,19 @@ public class ApiExceptionHandler {
         return response(405, "METHOD_NOT_ALLOWED", "This HTTP method is not supported.", request);
     }
 
+    @ExceptionHandler(org.springframework.web.multipart.MaxUploadSizeExceededException.class)
+    ResponseEntity<ApiError> maxUploadSize(org.springframework.web.multipart.MaxUploadSizeExceededException ex, HttpServletRequest request) {
+        return response(413, "FILE_TOO_LARGE", "Ảnh tải lên vượt quá dung lượng tối đa 10MB.", request);
+    }
+
+    @ExceptionHandler({org.springframework.web.multipart.MultipartException.class,
+            org.springframework.web.multipart.support.MissingServletRequestPartException.class,
+            org.springframework.web.bind.MissingServletRequestParameterException.class})
+    ResponseEntity<ApiError> multipartError(Exception ex, HttpServletRequest request) {
+        log.warn("Invalid multipart upload on {}: {}", request.getRequestURI(), ex.getMessage());
+        return response(400, "INVALID_MULTIPART", "Dữ liệu ảnh tải lên không hợp lệ hoặc thiếu trường 'file'.", request);
+    }
+
     @ExceptionHandler(HttpMediaTypeNotSupportedException.class)
     ResponseEntity<ApiError> media(HttpMediaTypeNotSupportedException ex, HttpServletRequest request) {
         return response(415, "UNSUPPORTED_MEDIA_TYPE", "Use application/json.", request);

@@ -13,9 +13,17 @@ public final class ImageSniffer {
         if (b.length >= 12 && b[0] == 'R' && b[1] == 'I' && b[2] == 'F' && b[3] == 'F'
                 && b[8] == 'W' && b[9] == 'E' && b[10] == 'B' && b[11] == 'P') return "image/webp";
         if (b.length >= 12 && b[4] == 'f' && b[5] == 't' && b[6] == 'y' && b[7] == 'p') {
-            String brand = new String(b, 8, 4, java.nio.charset.StandardCharsets.US_ASCII);
-            if (brand.equals("heic") || brand.equals("heix") || brand.equals("hevc") || brand.equals("mif1") || brand.equals("msf1")) {
-                return "image/heic";
+            int boxSize = ((b[0] & 0xFF) << 24) | ((b[1] & 0xFF) << 16) | ((b[2] & 0xFF) << 8) | (b[3] & 0xFF);
+            int limit = Math.min(b.length, boxSize >= 12 && boxSize <= 128 ? boxSize : Math.min(b.length, 64));
+            for (int offset = 8; offset + 4 <= limit; offset += 4) {
+                if (offset == 12) continue; // minor_version (4 bytes)
+                String brand = new String(b, offset, 4, java.nio.charset.StandardCharsets.US_ASCII).toLowerCase(java.util.Locale.ROOT);
+                if (brand.equals("heic") || brand.equals("heix") || brand.equals("hevc")
+                        || brand.equals("heis") || brand.equals("heim") || brand.equals("hevm") || brand.equals("hevs")
+                        || brand.equals("mif1") || brand.equals("msf1") || brand.equals("mihb") || brand.equals("mihe")
+                        || brand.equals("avif") || brand.equals("avis")) {
+                    return "image/heic";
+                }
             }
         }
         return null;

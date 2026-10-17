@@ -45,6 +45,9 @@ server:
   port: ${PORT:8080}
   # Deploys: finish in-flight requests before the old instance stops.
   shutdown: graceful
+  tomcat:
+    max-swallow-size: -1
+    max-http-form-post-size: 20MB
   error:
     include-message: never
     include-stacktrace: never
