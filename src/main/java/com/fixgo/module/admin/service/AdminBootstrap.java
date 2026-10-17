@@ -37,18 +37,21 @@ public class AdminBootstrap implements ApplicationRunner {
     @Transactional
     public void run(ApplicationArguments args) {
         if (properties.phone() == null || properties.phone().isBlank()) return;
-        String phone = PhoneNumbers.toE164(properties.phone());
         var now = clock.instant();
-        var existing = identities.findByProviderAndProviderUid(IdentityProvider.PHONE, phone).orElse(null);
-        if (existing != null) {
-            if (existing.getUser().getRole() != Role.ADMIN) {
-                existing.getUser().changeRole(Role.ADMIN);
-                log.info("Bootstrap: promoted existing account to ADMIN");
+        for (String rawPhone : properties.phone().split(",")) {
+            if (rawPhone == null || rawPhone.isBlank()) continue;
+            String phone = PhoneNumbers.toE164(rawPhone.strip());
+            var existing = identities.findByProviderAndProviderUid(IdentityProvider.PHONE, phone).orElse(null);
+            if (existing != null) {
+                if (existing.getUser().getRole() != Role.ADMIN) {
+                    existing.getUser().changeRole(Role.ADMIN);
+                    log.info("Bootstrap: promoted existing account {} to ADMIN", phone);
+                }
+                continue;
             }
-            return;
+            var admin = users.save(new User(Role.ADMIN, properties.fullName(), now));
+            identities.save(new UserIdentity(admin, IdentityProvider.PHONE, phone, true, now, null));
+            log.info("Bootstrap: created ADMIN account {} (signs in via OTP)", phone);
         }
-        var admin = users.save(new User(Role.ADMIN, properties.fullName(), now));
-        identities.save(new UserIdentity(admin, IdentityProvider.PHONE, phone, true, now, null));
-        log.info("Bootstrap: created ADMIN account (signs in via OTP)");
     }
 }
