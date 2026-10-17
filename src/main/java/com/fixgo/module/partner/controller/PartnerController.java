@@ -70,12 +70,6 @@ public class PartnerController {
         return service.submitDocuments(Actor.of(auth), request);
     }
 
-    /** Demo / Test 1-touch KYC self-approval from the Mechanic waiting screen. */
-    @PostMapping("/me/dev-approve-kyc")
-    public PartnerDtos.ProfileResponse devApproveKyc(Authentication auth) {
-        return service.devApproveSelf(Actor.of(auth));
-    }
-
     @GetMapping("/shop/staff")
     public List<PartnerDtos.StaffResponse> staff(Authentication auth) { return service.listStaff(Actor.of(auth)); }
 

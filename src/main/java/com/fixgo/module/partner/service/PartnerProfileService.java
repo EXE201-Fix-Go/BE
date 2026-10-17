@@ -152,20 +152,6 @@ public class PartnerProfileService {
         return toResponse(profile, users.findById(partnerId).orElseThrow(UserService::notFound));
     }
 
-    /**
-     * Demo / Dev 1-touch self-approval so testers or lecturers can approve their newly registered
-     * Partner KYC profile directly from the mobile app without opening Postman or SQL.
-     */
-    @Transactional
-    public PartnerDtos.ProfileResponse devApproveSelf(Actor actor) {
-        var profile = profiles.lockById(actor.userId()).orElseThrow(PartnerProfileService::notPartner);
-        var now = clock.instant();
-        profile.verify(VerificationStatus.APPROVED, actor.userId(), now);
-        documents.findByPartnerIdOrderByCreatedAtAsc(actor.userId())
-                .forEach(d -> d.review(VerificationStatus.APPROVED.name(), actor.userId(), now));
-        return toResponse(profile, users.findById(actor.userId()).orElseThrow(UserService::notFound));
-    }
-
     private void replaceServices(UUID partnerId, List<String> codes) {
         var found = catalog.activeByCodes(codes);
         if (found.size() != codes.stream().distinct().count()) {
