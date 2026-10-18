@@ -135,7 +135,9 @@ public class UploadController {
         @Override
         public void addResourceHandlers(ResourceHandlerRegistry registry) {
             String location = Path.of(properties.dir()).toAbsolutePath().toUri().toString();
-            registry.addResourceHandler("/uploads/**").addResourceLocations(location.endsWith("/") ? location : location + "/");
+            String normalizedLocation = location.endsWith("/") ? location : location + "/";
+            registry.addResourceHandler("/uploads/**", "/api/v1/uploads/**")
+                    .addResourceLocations(normalizedLocation);
         }
     }
 }
