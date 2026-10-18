@@ -13,22 +13,25 @@ import com.fixgo.module.dispatch.entity.DispatchPolicy;
 import com.fixgo.module.dispatch.repository.DispatchPolicyRepository;
 import com.fixgo.shared.config.DispatchProperties;
 import com.fixgo.module.pricing.repository.TravelFeeConfigRepository;
+import com.fixgo.module.pricing.service.TravelFeeCalculator;
 import com.fixgo.module.order.entity.*;
 import com.fixgo.module.order.enums.*;
 import com.fixgo.module.order.dto.*;
 import com.fixgo.module.order.service.*;
 import com.fixgo.module.order.repository.*;
+import com.fixgo.module.demobot.service.DemoBotService;
 import com.fixgo.module.partner.enums.Availability;
 import com.fixgo.module.partner.entity.PartnerProfile;
 import com.fixgo.module.partner.repository.PartnerProfileRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
-import java.math.BigDecimal;
-import java.math.RoundingMode;
+import org.springframework.transaction.support.TransactionTemplate;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.List;
@@ -50,13 +53,17 @@ public class DispatchService {
     private final OrderStateMachine stateMachine;
     private final DispatchProperties properties;
     private final TravelFeeConfigRepository travelFees;
+    private final DemoBotService demoBot;
+    private final TransactionTemplate tx;
     private final Clock clock;
 
     public DispatchService(DispatchRoundRepository rounds, OrderAssignmentRepository assignments,
                            DispatchPolicyRepository policies, PartnerProfileRepository partners,
                            RescueOrderRepository orders, ServiceCatalogCache catalog,
                            OrderStateMachine stateMachine, DispatchProperties properties,
-                           TravelFeeConfigRepository travelFees, Clock clock) {
+                           TravelFeeConfigRepository travelFees, @Lazy DemoBotService demoBot,
+                           PlatformTransactionManager transactionManager,
+                           Clock clock) {
         this.rounds = rounds;
         this.assignments = assignments;
         this.policies = policies;
@@ -66,6 +73,8 @@ public class DispatchService {
         this.stateMachine = stateMachine;
         this.properties = properties;
         this.travelFees = travelFees;
+        this.demoBot = demoBot;
+        this.tx = new TransactionTemplate(transactionManager);
         this.clock = clock;
     }
 
@@ -75,26 +84,60 @@ public class DispatchService {
      */
     @Transactional(propagation = Propagation.MANDATORY)
     public void startRound(RescueOrder order, int roundNo) {
+        openRound(order, roundNo, roundNo);
+    }
+
+    /**
+     * Puts an order back in front of partners after the partner who accepted it withdrew (caller holds the order
+     * lock, order already moved back to REQUESTED). A new round is numbered after the last one (UNIQUE per order)
+     * and reuses the radius of the policy the order was last dispatched with.
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void redispatch(RescueOrder order) {
+        var last = rounds.findFirstByOrderIdOrderByRoundNoDesc(order.getId()).orElse(null);
+        int seq = last == null ? 1 : last.getRoundNo() + 1;
+        var policy = last == null ? null : policies.findById(last.getPolicyId()).orElse(null);
+        openRound(order, seq, policy == null ? 1 : policy.getRoundNo());
+    }
+
+    /**
+     * {@code seq} numbers the dispatch_rounds row (unique per order); {@code policyRoundNo} picks the radius and
+     * timeout. They only differ after a withdrawal, when the order is dispatched again.
+     */
+    private void openRound(RescueOrder order, int seq, int policyRoundNo) {
         var now = clock.instant();
-        var policy = policies.findActiveGlobalRound(roundNo, now).orElse(null);
+        int roundNo = seq;
+        var policy = policies.findActiveGlobalRound(policyRoundNo, now).orElse(null);
         if (policy == null) {
             // No policy for this round means the previous one was effectively final (RB-26 misconfiguration guard).
-            log.warn("No dispatch policy for round {} — closing order {} as NO_PARTNER_FOUND", roundNo, order.getOrderCode());
+            log.warn("No dispatch policy for round {} — closing order {} as NO_PARTNER_FOUND", policyRoundNo, order.getOrderCode());
             stateMachine.transition(order, OrderStatus.NO_PARTNER_FOUND, null, ActorType.SYSTEM, "No dispatch policy");
             return;
         }
+        var minLocationAt = properties.hasLocationLimit() ? now.minus(properties.locationMaxAge()) : java.time.Instant.EPOCH;
+        UUID botId = demoBot != null ? demoBot.getBotUserId() : null;
         List<UUID> candidates = partners.findCandidates(order.getPickupLat(), order.getPickupLng(), policy.getRadiusM(),
-                order.getRequestedServiceId(), policy.isIncludeLowerPriority());
+                order.getRequestedServiceId(), policy.isIncludeLowerPriority(), order.getId(), minLocationAt)
+                .stream()
+                .filter(id -> botId == null || !id.equals(botId))
+                .toList();
         var expiresAt = now.plus(Duration.ofSeconds(policy.getTimeoutSeconds()));
         var round = rounds.save(new DispatchRound(order.getId(), policy.getId(), roundNo, policy.getRadiusM(), now,
                 expiresAt, candidates.size(), candidates.isEmpty() ? noCandidateReason(order, policy) : null));
+        log.info("dispatch.round code={} round={} radiusM={} candidates={}", order.getOrderCode(), roundNo,
+                policy.getRadiusM(), candidates.size());
         if (candidates.isEmpty()) {
             round.end(DispatchRound.EndReason.NO_CANDIDATE, now);
             if (policy.isFinalRound()) {
+                if (demoBot != null && demoBot.isEnabled()) {
+                    log.info("dispatch.demo-bot-standby code={} no real candidates in round {}, holding order in REQUESTED for Demo Bot",
+                            order.getOrderCode(), roundNo);
+                    return;
+                }
                 stateMachine.transition(order, OrderStatus.NO_PARTNER_FOUND, null, ActorType.SYSTEM,
                         "Round " + roundNo + ": no candidates");     // RB-34
             } else {
-                startRound(order, roundNo + 1);                        // BR08: widen immediately, nobody to wait for
+                openRound(order, seq + 1, policyRoundNo + 1);          // BR08: widen immediately, nobody to wait for
             }
             return;
         }
@@ -103,6 +146,8 @@ public class DispatchService {
                         OrderAssignment.Source.BROADCAST, null, now, expiresAt))
                 .toList();
         assignments.saveAll(newAssignments);
+        log.info("dispatch.offered code={} round={} offers={} expiresAt={}", order.getOrderCode(), roundNo,
+                newAssignments.size(), expiresAt);
         // dispatch_notifications (PUSH/ZALO/SMS) are recorded here once a provider is wired up.
     }
 
@@ -132,13 +177,30 @@ public class DispatchService {
     @Transactional(readOnly = true)
     public List<DispatchDtos.OfferResponse> listOffers(Actor partner) {
         var now = clock.instant();
-        List<OrderAssignment> list = assignments
-                .findByPartnerIdAndStatusOrderByOfferedAtDesc(partner.userId(), OrderAssignment.Status.OFFERED)
-                .stream().filter(a -> a.isOpenOffer(now)).toList();
-        // Batch-load orders and rounds in 2 IN queries instead of N×2 individual findById calls.
-        Map<UUID, RescueOrder> orderMap = batchLoadOrders(list);
-        Map<UUID, DispatchRound> roundMap = batchLoadRounds(list);
-        return list.stream()
+        if (demoBot != null) {
+            demoBot.recordRealPartnerPoll(partner.userId(), now);
+        }
+
+        // 1. Lấy TẤT CẢ đơn đã từng được phân cho thợ này
+        List<OrderAssignment> allAssignments = assignments
+                .findByPartnerIdAndStatusOrderByOfferedAtDesc(partner.userId(), OrderAssignment.Status.OFFERED);
+
+        // 2. Lọc ra những đơn chưa hết hạn
+        List<OrderAssignment> validList = allAssignments.stream().filter(a -> a.isOpenOffer(now)).toList();
+
+        // IN LOG KIỂM TRA
+        log.info("Thợ [{}] gọi listOffers: Tổng {} đơn được giao, {} đơn còn hạn.",
+                partner.userId(), allAssignments.size(), validList.size());
+
+        if (!allAssignments.isEmpty() && validList.isEmpty()) {
+            log.warn("⚠️ Đơn đã bị thu hồi ngay lập tức! Kiểm tra lại timeout policy. expiresAt: {}, now: {}",
+                    allAssignments.get(0).getExpiresAt(), now);
+        }
+
+        Map<UUID, RescueOrder> orderMap = batchLoadOrders(validList);
+        Map<UUID, DispatchRound> roundMap = batchLoadRounds(validList);
+
+        return validList.stream()
                 .map(a -> toOfferBatch(a, orderMap, roundMap))
                 .filter(o -> o != null && o.orderStatus() == OrderStatus.REQUESTED)
                 .toList();
@@ -171,46 +233,59 @@ public class DispatchService {
             throw new ApiException(HttpStatus.CONFLICT, "OFFER_CLOSED", "This offer has expired or was withdrawn.");
         }
         var profile = partners.lockById(partner.userId()).orElseThrow(DispatchService::offerNotFound);
-        // Mốc tính phí di chuyển = vị trí GPS thợ ngay lúc bấm nhận (nếu app gửi lên), thay cho vị trí lúc online.
-        if (req != null && req.lat() != null && req.lng() != null) {
-            profile.updatePresence(Availability.ONLINE, req.lat(), req.lng(), now);
-        }
         if (!profile.canTakeOrders()) {                                  // RB-16 re-check inside the transaction
             throw new ApiException(HttpStatus.FORBIDDEN, "PARTNER_NOT_ELIGIBLE", "Your profile cannot take orders.");
+        }
+        // One order at a time. The profile row is locked above, so two accepts by the same partner serialise here
+        // and the second one sees the first one's assignment.
+        if (assignments.hasActiveJob(partner.userId())) {
+            throw new ApiException(HttpStatus.CONFLICT, "PARTNER_BUSY", "Finish your current order before taking another.");
+        }
+        // Mốc tính phí di chuyển = vị trí GPS thợ ngay lúc bấm nhận (nếu app gửi lên), thay cho vị trí lúc online.
+        // Chỉ ghi vị trí: trạng thái sẵn sàng do luồng nhận đơn quyết định (BUSY bên dưới).
+        if (req != null && req.lat() != null && req.lng() != null) {
+            profile.updateLocation(req.lat(), req.lng(), now);
         }
         int claimed = orders.compareAndSetStatus(assignment.getOrderId(), OrderStatus.REQUESTED, OrderStatus.ASSIGNED);
         if (claimed == 0) {
             assignment.expire(now);
+            log.info("dispatch.lost-race orderId={} partnerId={}", assignment.getOrderId(), partner.userId());
             throw new ApiException(HttpStatus.CONFLICT, "ORDER_ALREADY_TAKEN", "Another partner accepted first.");
         }
         assignment.accept(now);
+        assignments.saveAndFlush(assignment);
         profile.setAvailability(Availability.BUSY);
+        partners.saveAndFlush(profile);
         if (assignment.getDispatchRoundId() != null) {
             rounds.lockById(assignment.getDispatchRoundId()).ifPresent(r -> r.end(DispatchRound.EndReason.CLAIMED, now));
             assignments.findByDispatchRoundId(assignment.getDispatchRoundId()).stream()
                     .filter(a -> !a.getId().equals(assignment.getId())).forEach(a -> a.expire(now));
         }
+        // Hủy ngay lập tức mọi bộ đếm hẹn giờ của Thợ Bot cho đơn này khi Thợ thật đã nhận đơn
+        if (demoBot != null) {
+            demoBot.onOrderClaimedByRealPartner(assignment.getOrderId());
+        }
         // Load order AFTER compareAndSetStatus succeeds: status is now ASSIGNED in DB, lockById reads it fresh.
         // This replaces the old findById() that came after, eliminating one separate SELECT round-trip.
         var order = orders.lockById(assignment.getOrderId()).orElseThrow(DispatchService::offerNotFound);
         snapshotTravel(order, profile, now);
+        orders.saveAndFlush(order);
+        log.info("dispatch.accepted code={} partnerId={} travelKm={} travelFee={}", order.getOrderCode(), partner.userId(),
+                order.getTravelDistanceKm(), order.getTravelFeeSnapshot());
         stateMachine.recordExternal(order.getId(), OrderStatus.REQUESTED, OrderStatus.ASSIGNED, partner.userId(),
                 ActorType.PARTNER, "Accepted by broadcast");
         return toOffer(assignment, order);
     }
 
-    /** Snapshots straight-line km from the partner's location to the pickup and the resulting travel fee (RB-23). */
+    /** Snapshots straight-line km from the partner's location to the pickup and the resulting pro-rata travel fee (RB-23). */
     private void snapshotTravel(RescueOrder order, PartnerProfile profile, java.time.Instant now) {
         if (profile.getCurrentLat() == null || profile.getCurrentLng() == null) return;
         var cfg = travelFees.findActiveGlobal(now).orElse(null);
         if (cfg == null) return;
         double km = GeoDistance.haversineKm(profile.getCurrentLat(), profile.getCurrentLng(),
                 order.getPickupLat(), order.getPickupLng());
-        BigDecimal distanceKm = BigDecimal.valueOf(km).setScale(1, RoundingMode.HALF_UP);
-        BigDecimal billableKm = distanceKm.subtract(cfg.getFreeKm()).max(BigDecimal.ZERO)
-                .setScale(0, RoundingMode.CEILING);
-        BigDecimal fee = billableKm.multiply(cfg.getPerKmAmount()).setScale(0, RoundingMode.HALF_UP);
-        order.recordTravel(distanceKm, fee, cfg.getId());
+        var travel = TravelFeeCalculator.compute(km, cfg.getFreeKm(), cfg.getPerKmAmount());
+        order.recordTravel(travel.distanceKm(), travel.fee(), cfg.getId());
     }
 
     @Transactional
@@ -221,36 +296,56 @@ public class DispatchService {
             throw new ApiException(HttpStatus.CONFLICT, "OFFER_CLOSED", "This offer is no longer open.");
         }
         assignment.decline(reason, clock.instant());
+        log.info("dispatch.declined orderId={} partnerId={}", assignment.getOrderId(), partner.userId());
     }
 
     /**
      * Housekeeping: rounds past their deadline widen to the next radius or end as NO_PARTNER_FOUND;
      * orders never confirmed by the customer expire (RB-27 / §7.1).
+     * Every round/order is handled in its own transaction, so one that fails (and is logged) cannot roll back or
+     * block the others, and is retried on the next tick.
      */
-    @Transactional
     public void tick() {
         var now = clock.instant();
         for (UUID roundId : rounds.findExpiredOpenIds(now)) {
-            var round = rounds.lockById(roundId).orElse(null);
-            if (round == null || !round.isOpen()) continue;
-            var order = orders.lockById(round.getOrderId()).orElse(null);
-            round.end(DispatchRound.EndReason.TIMEOUT, now);
-            assignments.findByDispatchRoundId(round.getId()).forEach(a -> a.expire(now));
-            if (order == null || order.getStatus() != OrderStatus.REQUESTED) continue;
-            var policy = policies.findById(round.getPolicyId()).orElse(null);
-            if (policy == null || policy.isFinalRound()) {
-                stateMachine.transition(order, OrderStatus.NO_PARTNER_FOUND, null, ActorType.SYSTEM,
-                        "Round " + round.getRoundNo() + " timed out");
-            } else {
-                startRound(order, round.getRoundNo() + 1);
+            try {
+                tx.executeWithoutResult(status -> expireRound(roundId, now));
+            } catch (RuntimeException ex) {
+                log.error("dispatch.tick failed for round {}", roundId, ex);
             }
         }
         var cutoff = now.minus(properties.pendingConfirmationTtl());
         for (var stale : orders.findByStatusCreatedBefore(OrderStatus.PENDING_CONFIRMATION, cutoff)) {
-            var order = orders.lockById(stale.getId()).orElse(null);
-            if (order != null && order.getStatus() == OrderStatus.PENDING_CONFIRMATION) {
-                stateMachine.transition(order, OrderStatus.EXPIRED, null, ActorType.SYSTEM, "Call-out fee never confirmed");
+            UUID orderId = stale.getId();
+            try {
+                tx.executeWithoutResult(status -> expireUnconfirmed(orderId));
+            } catch (RuntimeException ex) {
+                log.error("dispatch.tick failed for order {}", orderId, ex);
             }
+        }
+    }
+
+    private void expireRound(UUID roundId, java.time.Instant now) {
+        var round = rounds.lockById(roundId).orElse(null);
+        if (round == null || !round.isOpen()) return;
+        var order = orders.lockById(round.getOrderId()).orElse(null);
+        round.end(DispatchRound.EndReason.TIMEOUT, now);
+        log.info("dispatch.timeout orderId={} round={}", round.getOrderId(), round.getRoundNo());
+        assignments.findByDispatchRoundId(round.getId()).forEach(a -> a.expire(now));
+        if (order == null || order.getStatus() != OrderStatus.REQUESTED) return;
+        var policy = policies.findById(round.getPolicyId()).orElse(null);
+        if (policy == null || policy.isFinalRound()) {
+            stateMachine.transition(order, OrderStatus.NO_PARTNER_FOUND, null, ActorType.SYSTEM,
+                    "Round " + round.getRoundNo() + " timed out");
+        } else {
+            openRound(order, round.getRoundNo() + 1, policy.getRoundNo() + 1);
+        }
+    }
+
+    private void expireUnconfirmed(UUID orderId) {
+        var order = orders.lockById(orderId).orElse(null);
+        if (order != null && order.getStatus() == OrderStatus.PENDING_CONFIRMATION) {
+            stateMachine.transition(order, OrderStatus.EXPIRED, null, ActorType.SYSTEM, "Call-out fee never confirmed");
         }
     }
 

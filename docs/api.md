@@ -14,7 +14,9 @@ cho mọi endpoint trừ OTP/refresh và `GET /services`. Field lạ trong body 
 
 `role` là mã app-level FE điều hướng: `CUSTOMER | P_IND | P_SHOP | P_STAFF | ADMIN`
 (ERD lưu `app_users.role` + `partner_profiles.partner_type`, backend map ở tầng API).
-Số điện thoại lần đầu → tài khoản `CUSTOMER`. OTP: 6 số, 5 phút, 5 lần thử, dùng một lần (RB-03), giới hạn theo số & IP (RB-04).
+Số điện thoại lần đầu → tài khoản `CUSTOMER`.
+Giới hạn theo IP dùng `X-Forwarded-For` chỉ khi đặt `TRUSTED_PROXY_HOPS` (số proxy của mình đứng trước app; lấy mục thứ N từ bên phải, không bao giờ lấy mục đầu do client gửi). Mặc định 0 = bỏ qua header.
+Profile `prod` từ chối khởi động nếu `OTP_DEV_ECHO=true` hoặc `JWT_SECRET` ngắn hơn 32 ký tự. OTP: 6 số, 5 phút, 5 lần thử, dùng một lần (RB-03), giới hạn theo số & IP (RB-04).
 
 ## Người dùng
 - `GET /users/me` trả về `fullName`, số điện thoại, `email`, `dateOfBirth` (ISO `yyyy-MM-dd`) và `avatarUrl`.
@@ -53,14 +55,87 @@ Số điện thoại lần đầu → tài khoản `CUSTOMER`. OTP: 6 số, 5 ph
 
 Vòng điều phối (`dispatch_policies`, BR08): 2 km/60 s → 4 km/75 s → 7 km/90 s (vòng cuối). Hết vòng cuối không ai nhận → `NO_PARTNER_FOUND` (RB-34). Đơn `PENDING_CONFIRMATION` quá 10 phút → `EXPIRED`.
 
+## Quyền riêng tư (AUTHZ S1)
+SĐT và vị trí chỉ chia sẻ khi đơn còn mở. Khi đơn `COMPLETED`/`CANCELLED`: khách thấy `partner.phone/lat/lng = null` (vẫn có tên thợ); thợ thấy `contactPhone/lat/lng = null`. ADMIN không bị ẩn.
+
+## Báo giá hết hạn (S12)
+Nếu thợ đặt `validMinutes`, duyệt/từ chối sau hạn → 409 `QUOTE_EXPIRED`. Thợ gửi lại báo giá mới được (bản hết hạn chuyển `EXPIRED`, đơn giữ nguyên trạng thái chờ duyệt).
+
+## Dịch vụ tắt theo cấu hình
+`DISABLED_SERVICE_CODES` (mặc định `towing`) ẩn dịch vụ khỏi `GET /services` và từ chối tạo đơn/đăng ký dịch vụ đó (`UNKNOWN_SERVICE`).
+
+## Thợ rút đơn
+`POST /orders/{id}/withdraw` (thợ đã nhận, trạng thái `ASSIGNED`, body `{reason?}`) → 204. Đơn về `REQUESTED` và được phát lại cho thợ khác; thợ đã rút không được mời lại và mất quyền xem đơn. Sau `ARRIVED` trả 409. `POST /orders/{id}/cancel` của thợ khi đơn còn `ASSIGNED` được xử lý như rút đơn (app cũ vẫn chạy).
+Admin khóa tài khoản thợ đang có đơn mở → 409 `PARTNER_HAS_ACTIVE_JOB` (hủy hoặc giao lại đơn trước).
+`PUT /partner/me/location` `{lat,lng}` → 204: app thợ gửi vị trí mỗi ~60 giây khi đang online. Chỉ đổi vị trí, **không** đổi ONLINE/BUSY (khác `PATCH /partner/me/presence`), nên không thể ghi đè trạng thái khi đang nhận/hoàn tất đơn.
+`DISPATCH_LOCATION_MAX_AGE` (vd `10m`; mặc định `0s` = không giới hạn): bỏ qua thợ có vị trí cũ hơn ngưỡng khi chọn thợ — chỉ bật khi app thợ gửi vị trí định kỳ qua `PATCH /partner/me/presence`.
+
+## Nhân viên tiệm — lời mời (AUTHZ §6.3)
+Chủ tiệm chỉ **mời**, tài khoản người được mời không bị đổi cho tới khi họ tự chấp nhận.
+
+| Endpoint | Ai | Ghi chú |
+|---|---|---|
+| `POST /partner/shop/staff` `{phone, fullName}` | chủ tiệm đã được duyệt | tạo lời mời `PENDING` (hạn 7 ngày); trả danh sách nhân viên như cũ. 403 `PARTNER_NOT_VERIFIED` nếu tiệm chưa duyệt, 409 `INVITATION_PENDING` / `ALREADY_PARTNER` |
+| `GET /partner/shop/invitations` | chủ tiệm | lời mời đã gửi (`PENDING/ACCEPTED/DECLINED/CANCELLED/EXPIRED`) |
+| `DELETE /partner/shop/invitations/{id}` | chủ tiệm | hủy lời mời đang chờ → 204 |
+| `DELETE /partner/shop/staff/{userId}` | chủ tiệm | gỡ nhân viên, họ thành đối tác cá nhân → 204 (409 nếu đang có đơn) |
+| `POST /partner/shop/leave` | nhân viên | tự rời tiệm → 204 |
+| `GET /invitations` | người được mời (khách hoặc đối tác cá nhân) | lời mời đang mở gửi tới SĐT của mình |
+| `POST /invitations/{id}/accept` | người được mời | khách → `SHOP_STAFF` (vẫn chờ KYC, RB-12); trả hồ sơ đối tác. 409 `CUSTOMER_HAS_ACTIVE_ORDER` nếu khách còn đơn mở |
+| `POST /invitations/{id}/decline` | người được mời | → 204 |
+
+Lời mời của người khác trả 404 (không lộ tồn tại). Migration `V7__shop_invitations.sql`.
+
+## Gửi OTP qua SMS (eSMS.vn)
+`SMS_PROVIDER=log` (mặc định) chỉ ghi log — dùng khi chạy local cùng `OTP_DEV_ECHO=true`. `SMS_PROVIDER=esms` gửi qua eSMS.vn
+(`POST .../SendMultipleMessage_V4_post_json/`, tin chăm sóc khách hàng `SmsType=2`, thành công khi `CodeResult=100`).
+
+| Biến | Ý nghĩa |
+|---|---|
+| `ESMS_API_KEY`, `ESMS_SECRET_KEY` | khóa tài khoản eSMS (chỉ đặt trong biến môi trường của Render, không commit) |
+| `ESMS_BRANDNAME` | brandname đã đăng ký với eSMS (bắt buộc với `SmsType=2`) |
+| `ESMS_CONTENT_TEMPLATE` | nội dung tin, có `{code}` và `{minutes}`. **Phải trùng đúng mẫu đã đăng ký với eSMS**, nếu không eSMS trả `146` |
+| `ESMS_SANDBOX=true` | eSMS chỉ kiểm tra request, không gửi và không tính tiền — dùng để thử khóa trước khi chạy thật |
+| `ESMS_SMS_TYPE`, `ESMS_URL`, `ESMS_TIMEOUT` | mặc định `2`, URL của eSMS, `5s` |
+
+Mẫu tin mặc định (không dấu, 1 tin, cần đăng ký trước với eSMS):
+`{code} la ma xac thuc Fix&Go cua ban, co hieu luc {minutes} phut. Tuyet doi khong chia se ma nay voi bat ky ai.`
+
+Gửi lỗi (khóa sai `101`, brandname lạ `104`, mẫu chưa đăng ký `146`, cổng lỗi/timeout) → 502 `OTP_DELIVERY_FAILED`, không trả `devCode`,
+không lộ thông tin nhà cung cấp; chi tiết nằm trong log (`sms.esms ...`, chỉ hiện 4 số cuối). Profile `prod` từ chối khởi động nếu
+`SMS_PROVIDER` vẫn là `log`. SpeedSMS chưa được hỗ trợ (tài liệu công khai của họ chưa đủ rõ để viết adapter an toàn).
+
+## Ảnh và giấy tờ KYC (Supabase Storage)
+`STORAGE_PROVIDER=local` (mặc định) lưu trên đĩa máy — chỉ để dev. `STORAGE_PROVIDER=supabase` dùng Supabase Storage; **profile `prod`
+từ chối khởi động nếu vẫn là `local`** (đĩa Render bị xóa sau mỗi lần deploy).
+
+| Biến | Ý nghĩa |
+|---|---|
+| `SUPABASE_URL` | `https://<project-ref>.supabase.co` |
+| `SUPABASE_SERVICE_KEY` | service-role key của project. **Chỉ đặt ở biến môi trường server**, không bao giờ đưa vào FE/Mobile hay commit |
+| `SUPABASE_PUBLIC_BUCKET` / `SUPABASE_PRIVATE_BUCKET` | mặc định `fixgo-public` (ảnh hiện trường, công khai) và `fixgo-kyc` (giấy tờ, riêng tư); backend tự tạo bucket ở lần upload đầu |
+
+| Endpoint | Ai | Ghi chú |
+|---|---|---|
+| `POST /uploads` (multipart `file`) | đã đăng nhập | ảnh hiện trường → `{url}` công khai để đưa vào `photoUrls` |
+| `POST /uploads/kyc` (multipart `file`) | đã đăng nhập | giấy tờ → `{storageKey}` (`kyc/{userId}/{uuid}.jpg`), lưu bucket riêng tư |
+| `POST /partner-registration` | khách | `documents` phải đủ `ID_FRONT`, `ID_BACK`, `SELFIE`, mỗi `storageKey` là file **chính người đó** đã upload (400 `INVALID_DOCUMENT` / `KYC_DOCUMENTS_MISSING`) |
+| `GET /admin/partners/{id}/documents` | admin | danh sách giấy tờ + `fileAvailable` |
+| `GET /admin/partners/{id}/documents/{docId}/content` | admin | tải ảnh (backend stream, `Cache-Control: no-store`); log `kyc.document.viewed` |
+| `POST /admin/partners/{id}/verify` `APPROVED` | admin | 409 `KYC_DOCUMENTS_MISSING` nếu thiếu giấy tờ hoặc file không còn |
+
+File được nhận dạng theo **nội dung** (JPEG/PNG/WebP/HEIC), không tin `Content-Type` client gửi; HTML/SVG đội lốt ảnh bị từ chối (400 `UNSUPPORTED_FILE`).
+Hồ sơ đăng ký trước Phase này dùng khóa giả (`kyc/front.jpg`): admin thấy `fileAvailable=false` và không thể duyệt cho tới khi có giấy tờ thật.
+`PUT /partner/me/documents` `{documents:[ID_FRONT, ID_BACK, SELFIE]}` (cùng quy tắc như lúc đăng ký): thợ thuộc tiệm vừa nhận lời mời (chưa có giấy tờ) hoặc thợ bị từ chối nộp bộ mới → hồ sơ về `PENDING`. Hồ sơ đã `APPROVED` → 409 `ALREADY_VERIFIED`.
+
 ## Trạng thái đơn (ERD §7.1 — 14 giá trị)
 `PENDING_CONFIRMATION → REQUESTED → ASSIGNED → ARRIVED → CHECKING → WAITING_FOR_APPROVAL → APPROVED → IN_PROGRESS → COMPLETED`
 + `ADDITIONAL_QUOTE`, `PAUSED`, `CANCELLED`, `NO_PARTNER_FOUND`, `EXPIRED`. Chuyển trạng thái sai → 409 `INVALID_STATUS_TRANSITION`.
 
 ## Dữ liệu test (dev)
-Chạy với `DEV_SEED=true` (run-dev.ps1 bật sẵn): khách `0901000001`, thợ đã duyệt & online `0902000001`, `0902000002`, chủ tiệm `0903000001` (+ nhân viên `0903000002`), kèm 3 đơn mẫu (hoàn tất / hủy sau khi thợ tới / không tìm được thợ). Mã OTP lấy từ `devCode` khi `OTP_DEV_ECHO=true`.
+Không còn dữ liệu mẫu: tài khoản đăng nhập bằng OTP (xem `devCode` khi `OTP_DEV_ECHO=true`); tài khoản admin đầu tiên tạo qua `BOOTSTRAP_ADMIN_PHONE`.
 
 ## Lỗi
 `{timestamp, status, code, message, path, fieldErrors}`. Mã hay gặp: `INVALID_OTP`, `OTP_RATE_LIMITED`, `INVALID_REFRESH_TOKEN`,
 `ACCOUNT_LOCKED`, `FORBIDDEN`, `ORDER_NOT_FOUND` (không lộ đơn người khác), `INVALID_STATUS_TRANSITION`,
-`ORDER_ALREADY_TAKEN`, `OFFER_CLOSED`, `QUOTE_ALREADY_SENT`, `QUOTE_NOT_APPROVED`, `PARTNER_NOT_VERIFIED`.
+`ORDER_ALREADY_TAKEN`, `OFFER_CLOSED`, `QUOTE_ALREADY_SENT`, `QUOTE_EXPIRED`, `QUOTE_NOT_APPROVED`, `PARTNER_NOT_VERIFIED`.

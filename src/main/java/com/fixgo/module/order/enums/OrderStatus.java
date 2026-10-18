@@ -30,7 +30,7 @@ public enum OrderStatus {
     private static final Map<OrderStatus, Set<OrderStatus>> TRANSITIONS = Map.ofEntries(
             Map.entry(PENDING_CONFIRMATION, EnumSet.of(REQUESTED, CANCELLED, EXPIRED)),
             Map.entry(REQUESTED, EnumSet.of(ASSIGNED, CANCELLED, NO_PARTNER_FOUND)),
-            Map.entry(ASSIGNED, EnumSet.of(ARRIVED, CANCELLED)),
+            Map.entry(ASSIGNED, EnumSet.of(ARRIVED, REQUESTED, CANCELLED)),     // REQUESTED: the partner withdrew, order is re-dispatched
             Map.entry(ARRIVED, EnumSet.of(CHECKING, CANCELLED)),
             Map.entry(CHECKING, EnumSet.of(WAITING_FOR_APPROVAL, CANCELLED)),
             Map.entry(WAITING_FOR_APPROVAL, EnumSet.of(APPROVED, CANCELLED)),
@@ -42,6 +42,10 @@ public enum OrderStatus {
             Map.entry(CANCELLED, EnumSet.noneOf(OrderStatus.class)),
             Map.entry(NO_PARTNER_FOUND, EnumSet.noneOf(OrderStatus.class)),
             Map.entry(EXPIRED, EnumSet.noneOf(OrderStatus.class)));
+
+    public static final Set<OrderStatus> OPEN_STATUSES = EnumSet.of(
+            PENDING_CONFIRMATION, REQUESTED, ASSIGNED, ARRIVED, CHECKING,
+            WAITING_FOR_APPROVAL, APPROVED, IN_PROGRESS, ADDITIONAL_QUOTE, PAUSED);
 
     public boolean canTransitionTo(OrderStatus next) { return TRANSITIONS.get(this).contains(next); }
 

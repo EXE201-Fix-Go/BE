@@ -72,6 +72,12 @@ public class PartnerProfile {
         verifiedBy = by;
         verifiedAt = now;
     }
+    /** The partner sent new documents: back to the admin's queue. */
+    public void resubmit() {
+        verificationStatus = VerificationStatus.PENDING;
+        verifiedBy = null;
+        verifiedAt = null;
+    }
     public void updatePresence(Availability availability, Double lat, Double lng, Instant now) {
         this.availability = availability;
         if (lat != null && lng != null) {
@@ -80,7 +86,17 @@ public class PartnerProfile {
             this.locationUpdatedAt = now;
         }
     }
+    /** Position only: availability is left alone (accepting an order must not flip a partner back to ONLINE). */
+    public void updateLocation(double lat, double lng, Instant now) {
+        this.currentLat = lat;
+        this.currentLng = lng;
+        this.locationUpdatedAt = now;
+    }
     public void setAvailability(Availability availability) { this.availability = availability; }
+    /** An individual partner joins a shop (RB-10/RB-11: SHOP_STAFF exactly when there is a parent shop). */
+    public void joinShop(UUID shopId) { this.partnerType = PartnerType.SHOP_STAFF; this.parentShopId = shopId; }
+    /** Back to working on their own account. */
+    public void leaveShop() { this.partnerType = PartnerType.INDIVIDUAL; this.parentShopId = null; }
 
     public UUID getUserId() { return userId; }
     public UUID getParentShopId() { return parentShopId; }

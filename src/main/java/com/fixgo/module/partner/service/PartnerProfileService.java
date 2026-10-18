@@ -8,6 +8,7 @@ import com.fixgo.module.partner.service.*;
 import com.fixgo.module.catalog.entity.ServiceCatalog;
 
 import com.fixgo.module.catalog.service.ServiceCatalogCache;
+import com.fixgo.module.dispatch.repository.OrderAssignmentRepository;
 import com.fixgo.shared.util.Actor;
 import com.fixgo.shared.exception.ApiException;
 import com.fixgo.shared.util.PhoneNumbers;
@@ -28,20 +29,25 @@ public class PartnerProfileService {
     private final PartnerProfileRepository profiles;
     private final PartnerDocumentRepository documents;
     private final PartnerServiceOfferRepository offers;
+    private final OrderAssignmentRepository assignments;
     private final ServiceCatalogCache catalog;
     private final UserRepository users;
     private final UserIdentityRepository identities;
+    private final KycDocumentPolicy kyc;
     private final Clock clock;
 
     public PartnerProfileService(PartnerProfileRepository profiles, PartnerDocumentRepository documents,
-                                 PartnerServiceOfferRepository offers, ServiceCatalogCache catalog,
-                                 UserRepository users, UserIdentityRepository identities, Clock clock) {
+                                 PartnerServiceOfferRepository offers, OrderAssignmentRepository assignments,
+                                 ServiceCatalogCache catalog, UserRepository users, UserIdentityRepository identities,
+                                 KycDocumentPolicy kyc, Clock clock) {
         this.profiles = profiles;
         this.documents = documents;
         this.offers = offers;
+        this.assignments = assignments;
         this.catalog = catalog;
         this.users = users;
         this.identities = identities;
+        this.kyc = kyc;
         this.clock = clock;
     }
 
@@ -56,6 +62,7 @@ public class PartnerProfileService {
         if (profiles.existsById(actor.userId())) {
             throw new ApiException(HttpStatus.CONFLICT, "ALREADY_PARTNER", "This account is already a partner.");
         }
+        kyc.requireOwnUploads(actor.userId(), request.documents());
         var now = clock.instant();
         var user = users.lockById(actor.userId()).orElseThrow(UserService::notFound);
         user.rename(request.fullName());
@@ -82,39 +89,39 @@ public class PartnerProfileService {
             throw new ApiException(HttpStatus.FORBIDDEN, "PARTNER_NOT_VERIFIED",
                     "Your profile must be approved before going online.");
         }
+        // While an order is open the partner stays BUSY: going ONLINE would offer them a second job and going
+        // OFFLINE would abandon the customer. Re-sending the current state (e.g. a location ping) is still fine.
+        if (request.availability() != profile.getAvailability() && assignments.hasActiveJob(actor.userId())) {
+            throw new ApiException(HttpStatus.CONFLICT, "PARTNER_HAS_ACTIVE_JOB",
+                    "Finish or cancel your current order before changing your availability.");
+        }
         profile.updatePresence(request.availability(), request.lat(), request.lng(), clock.instant());
         return toResponse(profile, users.findById(actor.userId()).orElseThrow(UserService::notFound));
     }
 
-    /** Shop owner adds a mechanic. Creates the account + PHONE identity if needed; the mechanic logs in via OTP. */
+    /** Replaces the partner's documents with a fresh set and queues the profile for review again (BR06, RB-12). */
     @Transactional
-    public List<PartnerDtos.StaffResponse> inviteStaff(Actor actor, PartnerDtos.InviteStaffRequest request) {
-        var shop = profiles.findById(actor.userId()).orElseThrow(PartnerProfileService::notPartner);
-        if (shop.getPartnerType() != PartnerType.SHOP) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "SHOP_OWNER_ONLY", "Only a shop owner can add staff.");
+    public PartnerDtos.ProfileResponse submitDocuments(Actor actor, PartnerDtos.DocumentsRequest request) {
+        var profile = profiles.lockById(actor.userId()).orElseThrow(PartnerProfileService::notPartner);
+        if (profile.getVerificationStatus() == VerificationStatus.APPROVED) {
+            throw new ApiException(HttpStatus.CONFLICT, "ALREADY_VERIFIED", "Your profile is already verified.");
         }
+        kyc.requireOwnUploads(actor.userId(), request.documents());
         var now = clock.instant();
-        String phone = PhoneNumbers.toE164(request.phone());
-        var identity = identities.findByProviderAndProviderUid(IdentityProvider.PHONE, phone).orElse(null);
-        User staffUser;
-        if (identity == null) {
-            staffUser = users.save(new User(Role.PARTNER, request.fullName(), now));
-            identities.save(new UserIdentity(staffUser, IdentityProvider.PHONE, phone, true, now, null));
-        } else {
-            staffUser = users.lockById(identity.getUser().getId()).orElseThrow(UserService::notFound);
-            if (profiles.existsById(staffUser.getId())) {
-                throw new ApiException(HttpStatus.CONFLICT, "ALREADY_PARTNER", "This phone already belongs to a partner.");
-            }
-            if (staffUser.getRole() == Role.ADMIN) throw forbidden();
-            staffUser.changeRole(Role.PARTNER);
-            if (staffUser.getFullName() == null) staffUser.rename(request.fullName());
+        documents.deleteByPartnerId(actor.userId());
+        documents.flush();
+        for (var doc : request.documents()) {
+            documents.save(new PartnerDocument(actor.userId(), doc.documentType(), doc.storageKey(), now));
         }
-        var staff = profiles.save(new PartnerProfile(staffUser.getId(), PartnerType.SHOP_STAFF, shop.getUserId(), null));
-        // Staff inherit the shop's service list until they manage their own.
-        replaceServices(staff.getUserId(), offers.findByPartnerId(shop.getUserId()).stream()
-                .map(o -> catalog.byId(o.getServiceId()).map(ServiceCatalog::getCode).orElse(null))
-                .filter(c -> c != null).toList());
-        return listStaff(actor);
+        profile.resubmit();
+        return toResponse(profile, users.findById(actor.userId()).orElseThrow(UserService::notFound));
+    }
+
+    /** Position only (no availability change): the dispatch query and the travel fee read this position (RB-23). */
+    @Transactional
+    public void updateLocation(Actor actor, PartnerDtos.LocationRequest request) {
+        var profile = profiles.lockById(actor.userId()).orElseThrow(PartnerProfileService::notPartner);
+        profile.updateLocation(request.lat(), request.lng(), clock.instant());
     }
 
     @Transactional(readOnly = true)
@@ -137,6 +144,7 @@ public class PartnerProfileService {
             throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_REQUEST", "Choose APPROVED or REJECTED.");
         }
         var profile = profiles.lockById(partnerId).orElseThrow(PartnerProfileService::notPartner);
+        if (status == VerificationStatus.APPROVED) kyc.requireCompleteSet(documents.findByPartnerIdOrderByCreatedAtAsc(partnerId));
         var now = clock.instant();
         profile.verify(status, admin.userId(), now);
         documents.findByPartnerIdOrderByCreatedAtAsc(partnerId).forEach(d -> d.review(status.name(), admin.userId(), now));

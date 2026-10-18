@@ -59,6 +59,41 @@ public interface OrderAssignmentRepository extends JpaRepository<OrderAssignment
             @Param("orderStatus") OrderStatus orderStatus
     );
 
+    /**
+     * True while the partner holds an ACCEPTED assignment on an order that has not reached a terminal state.
+     * The assignment row itself stays ACCEPTED after completion, so the order status decides.
+     */
+    @Query("""
+        select count(a) > 0 from OrderAssignment a, RescueOrder o
+        where a.partnerId = :partnerId and a.status = :status and o.id = a.orderId and o.status in :openStatuses
+        """)
+    boolean existsJobInStatuses(
+            @Param("partnerId") UUID partnerId,
+            @Param("status") OrderAssignment.Status status,
+            @Param("openStatuses") Collection<OrderStatus> openStatuses
+    );
+
+    @Query("""
+        select count(a) from OrderAssignment a, RescueOrder o
+        where a.partnerId = :partnerId and a.status = :status and o.id = a.orderId and o.status in :openStatuses
+        """)
+    long countJobsInStatuses(
+            @Param("partnerId") UUID partnerId,
+            @Param("status") OrderAssignment.Status status,
+            @Param("openStatuses") Collection<OrderStatus> openStatuses
+    );
+
+    /** A partner works one order at a time: true while any accepted order is still open. */
+    default boolean hasActiveJob(UUID partnerId) {
+        return activeJobCount(partnerId) > 0;
+    }
+
+    /** How many accepted orders of this partner have not reached a terminal state (0 or 1 in normal operation). */
+    default long activeJobCount(UUID partnerId) {
+        var open = java.util.Arrays.stream(OrderStatus.values()).filter(s -> !s.isTerminal()).toList();
+        return countJobsInStatuses(partnerId, OrderAssignment.Status.ACCEPTED, open);
+    }
+
     /** One round trip: was this partner ever responsible for the order (accepted now or ended)? */
     boolean existsByOrderIdAndPartnerIdAndStatusIn(UUID orderId, UUID partnerId, Collection<OrderAssignment.Status> statuses);
 }

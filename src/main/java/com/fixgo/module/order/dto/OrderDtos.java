@@ -49,5 +49,25 @@ public final class OrderDtos {
                                 BigDecimal travelFee, Instant createdAt, Instant confirmedAt,
                                 Instant completedAt, PartnerSummary partner, QuoteDtos.QuoteResponse quote,
                                 PaymentSummary payment, ActorType cancellationSource, String cancellationReason,
-                                Instant cancelledAt, List<HistoryEntry> history) { }
+                                Instant cancelledAt, List<HistoryEntry> history) {
+
+        /** S1: once the order ends the customer no longer sees the partner's phone or position. */
+        public OrderResponse withoutPartnerContact() {
+            if (partner == null) return this;
+            var hidden = new PartnerSummary(partner.id(), partner.fullName(), null, null, null,
+                    partner.acceptedAt(), partner.arrivedAt());
+            return new OrderResponse(id, orderCode, status, serviceId, serviceName, extraServiceIds, addressText, note,
+                    photoUrls, contactName, contactPhone, lat, lng, callOutFee, travelDistanceKm, travelFee, createdAt,
+                    confirmedAt, completedAt, hidden, quote, payment, cancellationSource, cancellationReason,
+                    cancelledAt, history);
+        }
+
+        /** S1: once the order ends the partner no longer sees the customer's phone or exact pickup point. */
+        public OrderResponse withoutCustomerContact() {
+            return new OrderResponse(id, orderCode, status, serviceId, serviceName, extraServiceIds, addressText, note,
+                    photoUrls, contactName, null, null, null, callOutFee, travelDistanceKm, travelFee, createdAt,
+                    confirmedAt, completedAt, partner, quote, payment, cancellationSource, cancellationReason,
+                    cancelledAt, history);
+        }
+    }
 }

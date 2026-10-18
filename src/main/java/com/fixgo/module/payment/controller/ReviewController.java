@@ -1,61 +1,31 @@
 package com.fixgo.module.payment.controller;
-import com.fixgo.module.payment.entity.*;
-import com.fixgo.module.payment.repository.*;
-import com.fixgo.module.payment.service.*;
 
-
+import com.fixgo.module.payment.service.ReviewService;
 import com.fixgo.shared.util.Actor;
-import com.fixgo.shared.exception.ApiException;
-import com.fixgo.module.dispatch.service.DispatchService;
-import com.fixgo.module.order.enums.OrderStatus;
-import com.fixgo.module.order.repository.RescueOrderRepository;
-import com.fixgo.module.iam.enums.Role;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.Size;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.core.Authentication;
-import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
-import java.time.Clock;
+
 import java.time.Instant;
 import java.util.UUID;
 
 @RestController
 @RequestMapping("/api/v1/orders/{orderId}/review")
 public class ReviewController {
-    private final ReviewRepository reviews;
-    private final RescueOrderRepository orders;
-    private final DispatchService dispatch;
-    private final Clock clock;
+    private final ReviewService reviews;
 
-    public ReviewController(ReviewRepository reviews, RescueOrderRepository orders, DispatchService dispatch, Clock clock) {
+    public ReviewController(ReviewService reviews) {
         this.reviews = reviews;
-        this.orders = orders;
-        this.dispatch = dispatch;
-        this.clock = clock;
     }
 
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
-    @Transactional
     public ReviewResponse create(Authentication auth, @PathVariable UUID orderId, @Valid @RequestBody ReviewRequest request) {
-        var actor = Actor.of(auth);
-        var order = orders.lockById(orderId).orElseThrow(() ->
-                new ApiException(HttpStatus.NOT_FOUND, "ORDER_NOT_FOUND", "Order does not exist."));
-        if (!actor.is(Role.CUSTOMER) || !order.getCustomerId().equals(actor.userId())) {
-            throw new ApiException(HttpStatus.NOT_FOUND, "ORDER_NOT_FOUND", "Order does not exist.");
-        }
-        if (order.getStatus() != OrderStatus.COMPLETED) {
-            throw new ApiException(HttpStatus.CONFLICT, "ORDER_NOT_COMPLETED", "Only completed orders can be reviewed.");
-        }
-        if (reviews.existsByOrderId(orderId)) {
-            throw new ApiException(HttpStatus.CONFLICT, "ALREADY_REVIEWED", "This order already has a review.");
-        }
-        var partnerId = dispatch.currentAssignment(orderId).orElseThrow(() ->
-                new ApiException(HttpStatus.CONFLICT, "NO_PARTNER", "No partner served this order.")).getPartnerId();
-        var review = reviews.save(new Review(orderId, partnerId, request.rating(), request.feedback(), clock.instant()));
+        var review = reviews.create(Actor.of(auth), orderId, request.rating(), request.feedback());
         return new ReviewResponse(review.getId(), orderId, review.getRating(), review.getFeedback(), review.getCreatedAt());
     }
 

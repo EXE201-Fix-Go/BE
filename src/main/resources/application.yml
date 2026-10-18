@@ -1,6 +1,8 @@
-﻿spring:
+spring:
   application:
     name: fixgo-backend
+  lifecycle:
+    timeout-per-shutdown-phase: 20s
   datasource:
     url: ${DB_URL}
     username: ${DB_USERNAME}
@@ -35,8 +37,17 @@
     multipart:
       max-file-size: 10MB
       max-request-size: 12MB
+logging:
+  pattern:
+    # rid = per-request id set by RequestLogFilter (also returned as the X-Request-Id header)
+    level: "%5p [%X{rid:-}]"
 server:
   port: ${PORT:8080}
+  # Deploys: finish in-flight requests before the old instance stops.
+  shutdown: graceful
+  tomcat:
+    max-swallow-size: -1
+    max-http-form-post-size: 20MB
   error:
     include-message: never
     include-stacktrace: never
@@ -53,18 +64,50 @@ fixgo:
     otp-max-per-ip-per-hour: ${OTP_MAX_PER_IP_PER_HOUR:30}
     # Dev only: echo the OTP code in the API response because no SMS provider is chosen yet (BRD §8).
     otp-dev-echo: ${OTP_DEV_ECHO:false}
+    # Number of proxies in front of the app that append to X-Forwarded-For (Render: see docs/deploy). 0 = ignore the header.
+    trusted-proxy-hops: ${TRUSTED_PROXY_HOPS:0}
   dispatch:
     pending-confirmation-ttl: 10m
     scheduler-enabled: ${DISPATCH_SCHEDULER:true}
     scheduler-interval-ms: 5000
+    # Ignore partners whose last position is older than this (e.g. PT10M). 0s = no limit; turn it on once the
+    # partner apps send their position periodically, otherwise idle-but-online partners stop matching.
+    location-max-age: ${DISPATCH_LOCATION_MAX_AGE:0s}
+  sms:
+    # log = only log the delivery attempt (local dev, with OTP_DEV_ECHO) | esms = eSMS.vn REST API (docs/api.md).
+    provider: ${SMS_PROVIDER:log}
+    esms:
+      url: ${ESMS_URL:}
+      api-key: ${ESMS_API_KEY:}
+      secret-key: ${ESMS_SECRET_KEY:}
+      brandname: ${ESMS_BRANDNAME:}
+      sms-type: ${ESMS_SMS_TYPE:2}
+      sandbox: ${ESMS_SANDBOX:false}
+      content-template: ${ESMS_CONTENT_TEMPLATE:}
+      timeout: ${ESMS_TIMEOUT:5s}
+  catalog:
+    # Comma-separated service codes hidden from customers and partners. Towing waits for the hand-over flow (BR04/BR05).
+    disabled-codes: ${DISABLED_SERVICE_CODES:towing}
+  storage:
+    # local = this machine's disk (development only) | supabase = Supabase Storage (needs SUPABASE_URL + SUPABASE_SERVICE_KEY).
+    provider: ${STORAGE_PROVIDER:local}
+    private-dir: ${PRIVATE_UPLOADS_DIR:.local/private-uploads}
+    supabase:
+      url: ${SUPABASE_URL:}
+      service-key: ${SUPABASE_SERVICE_KEY:}
+      public-bucket: ${SUPABASE_PUBLIC_BUCKET:fixgo-public}
+      private-bucket: ${SUPABASE_PRIVATE_BUCKET:fixgo-kyc}
+      timeout: ${SUPABASE_TIMEOUT:10s}
   uploads:
     # Pilot: local disk (git-ignored). Production: Cloudinary (BRD §8).
     dir: ${UPLOADS_DIR:.local/uploads}
     public-base-url: ${PUBLIC_BASE_URL:http://localhost:8080}
   cors:
     allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:*,http://127.0.0.1:*,https://exe201-fix-go.github.io}
-  # Dev only: sample accounts + orders (see admin/DevSeed).
-  dev-seed: ${DEV_SEED:false}
   bootstrap-admin:
     phone: ${BOOTSTRAP_ADMIN_PHONE:}
     full-name: ${BOOTSTRAP_ADMIN_NAME:FixGo Admin}
+  demo-bot:
+    enabled: ${DEMO_BOT_ENABLED:true}
+    delay-seconds: ${DEMO_BOT_DELAY_SECONDS:20}
+

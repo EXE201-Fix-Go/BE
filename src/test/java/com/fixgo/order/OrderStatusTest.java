@@ -32,6 +32,16 @@ class OrderStatusTest {
     }
 
     @Test
+    void onlyAnAssignedOrderCanGoBackToRequestedWhenThePartnerWithdraws() {
+        assertThat(OrderStatus.ASSIGNED.canTransitionTo(OrderStatus.REQUESTED)).isTrue();
+        for (var s : OrderStatus.values()) {
+            boolean legal = s == OrderStatus.PENDING_CONFIRMATION || s == OrderStatus.ASSIGNED;   // confirm, or withdraw
+            assertThat(s.canTransitionTo(OrderStatus.REQUESTED)).as(s + " -> REQUESTED").isEqualTo(legal);
+        }
+        assertThat(OrderStatus.ARRIVED.canTransitionTo(OrderStatus.ASSIGNED)).isFalse();
+    }
+
+    @Test
     void approvedCannotBeCancelledAndInProgressCannotBeCancelledDirectly() {
         assertThat(OrderStatus.APPROVED.canTransitionTo(OrderStatus.CANCELLED)).isFalse();
         assertThat(OrderStatus.IN_PROGRESS.canTransitionTo(OrderStatus.CANCELLED)).isFalse();

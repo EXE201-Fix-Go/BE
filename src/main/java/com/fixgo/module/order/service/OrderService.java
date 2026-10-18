@@ -12,6 +12,7 @@ import com.fixgo.shared.util.Actor;
 import com.fixgo.shared.exception.ApiException;
 import com.fixgo.shared.util.PhoneNumbers;
 import com.fixgo.module.pricing.repository.CallOutFeeConfigRepository;
+import com.fixgo.module.demobot.service.DemoBotService;
 import com.fixgo.module.dispatch.entity.DispatchRound;
 import com.fixgo.module.dispatch.service.DispatchService;
 import com.fixgo.module.dispatch.entity.OrderAssignment;
@@ -26,6 +27,7 @@ import com.fixgo.module.iam.enums.Role;
 import com.fixgo.module.iam.repository.UserIdentityRepository;
 import com.fixgo.module.iam.repository.UserRepository;
 import com.fixgo.module.iam.service.UserService;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -42,6 +44,7 @@ import java.util.stream.Collectors;
  */
 @Service
 public class OrderService {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(OrderService.class);
     private final RescueOrderRepository orders;
     private final OrderStatusHistoryRepository history;
     private final OrderAssignmentRepository assignments;
@@ -55,13 +58,15 @@ public class OrderService {
     private final DispatchService dispatch;
     private final PaymentService payments;
     private final OrderStateMachine stateMachine;
+    private final DemoBotService demoBot;
     private final Clock clock;
 
     public OrderService(RescueOrderRepository orders, OrderStatusHistoryRepository history,
                         OrderAssignmentRepository assignments, ServiceCatalogCache catalog,
                         CallOutFeeConfigRepository feeConfigs, PartnerProfileRepository partners, UserRepository users,
                         UserIdentityRepository identities, QuoteRepository quotes, QuoteMapper quoteMapper,
-                        DispatchService dispatch, PaymentService payments, OrderStateMachine stateMachine, Clock clock) {
+                        DispatchService dispatch, PaymentService payments, OrderStateMachine stateMachine,
+                        @Lazy DemoBotService demoBot, Clock clock) {
         this.orders = orders;
         this.history = history;
         this.assignments = assignments;
@@ -75,6 +80,7 @@ public class OrderService {
         this.dispatch = dispatch;
         this.payments = payments;
         this.stateMachine = stateMachine;
+        this.demoBot = demoBot;
         this.clock = clock;
     }
 
@@ -84,6 +90,10 @@ public class OrderService {
     @Transactional
     public OrderDtos.OrderResponse create(Actor actor, OrderDtos.CreateOrderRequest request) {
         if (!actor.is(Role.CUSTOMER)) throw forbidden();
+        if (orders.existsOpenOrderOf(actor.userId(), OrderStatus.OPEN_STATUSES)) {
+            throw new ApiException(HttpStatus.CONFLICT, "ACTIVE_ORDER_EXISTS",
+                    "Bạn đang có một đơn cứu hộ đang diễn ra. Vui lòng hoàn tất hoặc hủy đơn hiện tại trước khi đặt đơn mới.");
+        }
         var now = clock.instant();
         var service = catalog.activeByCode(request.serviceId())
                 .orElseThrow(() -> new ApiException(HttpStatus.BAD_REQUEST, "UNKNOWN_SERVICE", "Unknown service."));
@@ -119,9 +129,20 @@ public class OrderService {
     public OrderDtos.OrderResponse confirm(Actor actor, UUID orderId) {
         var order = lockOwned(actor, orderId);
         if (order.getStatus() != OrderStatus.PENDING_CONFIRMATION) throw OrderStateMachine.wrongState(order.getStatus(), "confirm");
+        var confirmedOpenStatuses = java.util.EnumSet.of(
+                OrderStatus.REQUESTED, OrderStatus.ASSIGNED, OrderStatus.ARRIVED, OrderStatus.CHECKING,
+                OrderStatus.WAITING_FOR_APPROVAL, OrderStatus.APPROVED, OrderStatus.IN_PROGRESS,
+                OrderStatus.ADDITIONAL_QUOTE, OrderStatus.PAUSED);
+        if (orders.existsOpenOrderOf(actor.userId(), confirmedOpenStatuses)) {
+            throw new ApiException(HttpStatus.CONFLICT, "ACTIVE_ORDER_EXISTS",
+                    "Bạn đang có một đơn cứu hộ đang diễn ra. Vui lòng hoàn tất hoặc hủy đơn hiện tại trước khi đặt đơn mới.");
+        }
         order.confirmCallOutFee(clock.instant());
         stateMachine.transition(order, OrderStatus.REQUESTED, actor.userId(), ActorType.CUSTOMER, "Call-out fee confirmed");
         dispatch.startRound(order, 1);
+        if (demoBot != null) {
+            demoBot.onOrderConfirmed(order.getId());
+        }
         return toSimpleResponse(order);
     }
 
@@ -135,8 +156,36 @@ public class OrderService {
             case ADMIN -> true;
         };
         if (!allowed) throw notFoundOrForbidden(actor, order);
+        // A partner backing out before arriving does not cancel the customer's rescue: the order goes back out.
+        if (actor.is(Role.PARTNER) && order.getStatus() == OrderStatus.ASSIGNED) {
+            withdrawLocked(order, actor, reason);
+            return toResponse(order).withoutCustomerContact();
+        }
         cancelLocked(order, actor, reason);
-        return toResponse(order);
+        return viewFor(actor, order);
+    }
+
+    /**
+     * The partner who accepted gives the order up before arriving. The customer keeps their request: the order
+     * returns to REQUESTED and is dispatched again, never back to this partner. The assignment is closed as
+     * DECLINED (reason WITHDRAWN) so the partner loses all access to the order and its contact details (S1).
+     */
+    @Transactional
+    public void withdraw(Actor actor, UUID orderId, String reason) {
+        var order = lockAssigned(actor, orderId);
+        withdrawLocked(order, actor, reason);
+    }
+
+    private void withdrawLocked(RescueOrder order, Actor actor, String reason) {
+        if (order.getStatus() != OrderStatus.ASSIGNED) throw OrderStateMachine.wrongState(order.getStatus(), "withdraw from");
+        var now = clock.instant();
+        var assignment = dispatch.currentAssignment(order.getId()).orElseThrow(OrderService::forbidden);
+        assignment.decline("WITHDRAWN" + (reason == null || reason.isBlank() ? "" : ": " + reason), now);
+        partners.lockById(actor.userId()).ifPresent(p -> p.setAvailability(Availability.ONLINE));
+        order.recordTravel(null, null, null);        // the fee belonged to the partner who left
+        stateMachine.transition(order, OrderStatus.REQUESTED, actor.userId(), ActorType.PARTNER, "Partner withdrew");
+        log.info("order.withdrawn code={} partnerId={}", order.getOrderCode(), actor.userId());
+        dispatch.redispatch(order);
     }
 
     /** Shared with quote decline (GW-02). Caller holds the order lock. */
@@ -147,6 +196,9 @@ public class OrderService {
         stateMachine.transition(order, OrderStatus.CANCELLED, actor.userId(), source, reason);
         order.recordCancellation(actor.userId(), source, reason, now);
         dispatch.closeOpenRounds(order.getId(), DispatchRound.EndReason.CANCELLED);
+        if (demoBot != null) {
+            demoBot.onOrderCancelled(order.getId());
+        }
         var current = dispatch.currentAssignment(order.getId()).orElse(null);
         if (current != null) {
             current.end(now);
@@ -168,21 +220,21 @@ public class OrderService {
         var order = lockAssigned(actor, orderId);
         stateMachine.transition(order, OrderStatus.ARRIVED, actor.userId(), ActorType.PARTNER, null);
         dispatch.currentAssignment(orderId).ifPresent(a -> a.markArrived(clock.instant()));
-        return toResponse(order);
+        return viewFor(actor, order);
     }
 
     @Transactional
     public OrderDtos.OrderResponse startChecking(Actor actor, UUID orderId) {
         var order = lockAssigned(actor, orderId);
         stateMachine.transition(order, OrderStatus.CHECKING, actor.userId(), ActorType.PARTNER, null);
-        return toResponse(order);
+        return viewFor(actor, order);
     }
 
     @Transactional
     public OrderDtos.OrderResponse pause(Actor actor, UUID orderId, String note) {
         var order = lockAssigned(actor, orderId);
         stateMachine.transition(order, OrderStatus.PAUSED, actor.userId(), ActorType.PARTNER, note);
-        return toResponse(order);
+        return viewFor(actor, order);
     }
 
     @Transactional
@@ -190,7 +242,7 @@ public class OrderService {
         var order = lockAssigned(actor, orderId);
         if (order.getStatus() != OrderStatus.PAUSED) throw OrderStateMachine.wrongState(order.getStatus(), "resume");
         stateMachine.transition(order, OrderStatus.IN_PROGRESS, actor.userId(), ActorType.PARTNER, null);
-        return toResponse(order);
+        return viewFor(actor, order);
     }
 
     /** BR02: nothing completes without an APPROVED quote; the amount due is that quote's total (RB-42). */
@@ -208,14 +260,14 @@ public class OrderService {
                 "order:" + orderId + ":final");
         // Pilot: the partner collects cash when finishing, so completing IS the payment confirmation (RB-59).
         payments.confirmIfPending(actor, orderId);
-        return toResponse(order);
+        return viewFor(actor, order);
     }
 
     // ------------------------------------------------------------------ read
 
     @Transactional(readOnly = true)
     public OrderDtos.OrderResponse get(Actor actor, UUID orderId) {
-        return toResponse(visibleOrder(actor, orderId));
+        return viewFor(actor, visibleOrder(actor, orderId));
     }
 
     /** Lightweight poll target: status only (3 queries instead of ~15), so mobile clients can poll cheaply. */
@@ -240,7 +292,7 @@ public class OrderService {
     @Transactional(readOnly = true)
     public List<OrderDtos.OrderResponse> listMine(Actor actor) {
         if (!actor.is(Role.CUSTOMER)) throw forbidden();
-        return orders.findByCustomerIdOrderByCreatedAtDesc(actor.userId()).stream().map(this::toResponse).toList();
+        return orders.findByCustomerIdOrderByCreatedAtDesc(actor.userId()).stream().map(o -> viewFor(actor, o)).toList();
     }
 
     // ------------------------------------------------------------------ helpers
@@ -269,6 +321,29 @@ public class OrderService {
         boolean related = order.getCustomerId().equals(actor.userId()) || isCurrentPartner(actor, order)
                 || actor.is(Role.ADMIN);
         return related ? forbidden() : notFound();
+    }
+
+    /**
+     * S1: phone numbers and live positions are shared only while the order is open. Once it is COMPLETED or
+     * CANCELLED the customer stops seeing the partner's contact/position and the partner stops seeing the
+     * customer's phone and exact pickup point. ADMIN sees everything.
+     */
+    private OrderDtos.OrderResponse viewFor(Actor actor, RescueOrder o) {
+        var response = toResponse(o);
+        if (!o.getStatus().isTerminal()) return response;
+        return switch (actor.role()) {
+            case CUSTOMER -> response.withoutPartnerContact();
+            case PARTNER -> response.withoutCustomerContact();
+            case ADMIN -> response;
+        };
+    }
+
+    /** "Đã thanh toán" (RB-59): same visibility rule as reading the order, checked in the same transaction as the write. */
+    @Transactional
+    public OrderDtos.OrderResponse confirmPayment(Actor actor, UUID orderId) {
+        var order = visibleOrder(actor, orderId);
+        payments.confirm(actor, orderId);
+        return viewFor(actor, order);
     }
 
     @Transactional(readOnly = true)
