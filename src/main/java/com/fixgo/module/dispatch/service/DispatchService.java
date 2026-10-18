@@ -177,6 +177,9 @@ public class DispatchService {
     @Transactional(readOnly = true)
     public List<DispatchDtos.OfferResponse> listOffers(Actor partner) {
         var now = clock.instant();
+        if (demoBot != null) {
+            demoBot.recordRealPartnerPoll(partner.userId(), now);
+        }
 
         // 1. Lấy TẤT CẢ đơn đã từng được phân cho thợ này
         List<OrderAssignment> allAssignments = assignments
@@ -250,16 +253,23 @@ public class DispatchService {
             throw new ApiException(HttpStatus.CONFLICT, "ORDER_ALREADY_TAKEN", "Another partner accepted first.");
         }
         assignment.accept(now);
+        assignments.saveAndFlush(assignment);
         profile.setAvailability(Availability.BUSY);
+        partners.saveAndFlush(profile);
         if (assignment.getDispatchRoundId() != null) {
             rounds.lockById(assignment.getDispatchRoundId()).ifPresent(r -> r.end(DispatchRound.EndReason.CLAIMED, now));
             assignments.findByDispatchRoundId(assignment.getDispatchRoundId()).stream()
                     .filter(a -> !a.getId().equals(assignment.getId())).forEach(a -> a.expire(now));
         }
+        // Hủy ngay lập tức mọi bộ đếm hẹn giờ của Thợ Bot cho đơn này khi Thợ thật đã nhận đơn
+        if (demoBot != null) {
+            demoBot.onOrderClaimedByRealPartner(assignment.getOrderId());
+        }
         // Load order AFTER compareAndSetStatus succeeds: status is now ASSIGNED in DB, lockById reads it fresh.
         // This replaces the old findById() that came after, eliminating one separate SELECT round-trip.
         var order = orders.lockById(assignment.getOrderId()).orElseThrow(DispatchService::offerNotFound);
         snapshotTravel(order, profile, now);
+        orders.saveAndFlush(order);
         log.info("dispatch.accepted code={} partnerId={} travelKm={} travelFee={}", order.getOrderCode(), partner.userId(),
                 order.getTravelDistanceKm(), order.getTravelFeeSnapshot());
         stateMachine.recordExternal(order.getId(), OrderStatus.REQUESTED, OrderStatus.ASSIGNED, partner.userId(),

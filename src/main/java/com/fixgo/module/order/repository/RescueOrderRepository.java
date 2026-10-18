@@ -37,7 +37,7 @@ public interface RescueOrderRepository extends JpaRepository<RescueOrder, UUID> 
      * RB-36: first partner to claim wins. The conditional UPDATE is the arbiter; callers check the row count.
      * The version bump keeps JPA optimistic locking consistent for anyone holding the entity.
      */
-    @Modifying(flushAutomatically = true)
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
     @Query("update RescueOrder o set o.status = :next, o.version = o.version + 1 "
             + "where o.id = :id and o.status = :expected")
     int compareAndSetStatus(UUID id, OrderStatus expected, OrderStatus next);

@@ -90,6 +90,10 @@ public class OrderService {
     @Transactional
     public OrderDtos.OrderResponse create(Actor actor, OrderDtos.CreateOrderRequest request) {
         if (!actor.is(Role.CUSTOMER)) throw forbidden();
+        if (orders.existsOpenOrderOf(actor.userId(), OrderStatus.OPEN_STATUSES)) {
+            throw new ApiException(HttpStatus.CONFLICT, "ACTIVE_ORDER_EXISTS",
+                    "Bạn đang có một đơn cứu hộ đang diễn ra. Vui lòng hoàn tất hoặc hủy đơn hiện tại trước khi đặt đơn mới.");
+        }
         var now = clock.instant();
         var service = catalog.activeByCode(request.serviceId())
                 .orElseThrow(() -> new ApiException(HttpStatus.BAD_REQUEST, "UNKNOWN_SERVICE", "Unknown service."));
@@ -125,6 +129,14 @@ public class OrderService {
     public OrderDtos.OrderResponse confirm(Actor actor, UUID orderId) {
         var order = lockOwned(actor, orderId);
         if (order.getStatus() != OrderStatus.PENDING_CONFIRMATION) throw OrderStateMachine.wrongState(order.getStatus(), "confirm");
+        var confirmedOpenStatuses = java.util.EnumSet.of(
+                OrderStatus.REQUESTED, OrderStatus.ASSIGNED, OrderStatus.ARRIVED, OrderStatus.CHECKING,
+                OrderStatus.WAITING_FOR_APPROVAL, OrderStatus.APPROVED, OrderStatus.IN_PROGRESS,
+                OrderStatus.ADDITIONAL_QUOTE, OrderStatus.PAUSED);
+        if (orders.existsOpenOrderOf(actor.userId(), confirmedOpenStatuses)) {
+            throw new ApiException(HttpStatus.CONFLICT, "ACTIVE_ORDER_EXISTS",
+                    "Bạn đang có một đơn cứu hộ đang diễn ra. Vui lòng hoàn tất hoặc hủy đơn hiện tại trước khi đặt đơn mới.");
+        }
         order.confirmCallOutFee(clock.instant());
         stateMachine.transition(order, OrderStatus.REQUESTED, actor.userId(), ActorType.CUSTOMER, "Call-out fee confirmed");
         dispatch.startRound(order, 1);

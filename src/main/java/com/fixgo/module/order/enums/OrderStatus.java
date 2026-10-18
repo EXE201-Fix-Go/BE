@@ -43,6 +43,10 @@ public enum OrderStatus {
             Map.entry(NO_PARTNER_FOUND, EnumSet.noneOf(OrderStatus.class)),
             Map.entry(EXPIRED, EnumSet.noneOf(OrderStatus.class)));
 
+    public static final Set<OrderStatus> OPEN_STATUSES = EnumSet.of(
+            PENDING_CONFIRMATION, REQUESTED, ASSIGNED, ARRIVED, CHECKING,
+            WAITING_FOR_APPROVAL, APPROVED, IN_PROGRESS, ADDITIONAL_QUOTE, PAUSED);
+
     public boolean canTransitionTo(OrderStatus next) { return TRANSITIONS.get(this).contains(next); }
 
     public boolean isTerminal() { return TRANSITIONS.get(this).isEmpty(); }
