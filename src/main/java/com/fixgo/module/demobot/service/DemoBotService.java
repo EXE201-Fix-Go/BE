@@ -106,6 +106,8 @@ public class DemoBotService implements ApplicationRunner, DisposableBean {
     });
 
     private final ConcurrentHashMap<UUID, List<ScheduledFuture<?>>> activeTimers = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<UUID, java.time.Instant> realPartnerLastPollAt = new ConcurrentHashMap<>();
+    private static final java.time.Duration REAL_PARTNER_ACTIVE_POLL_WINDOW = java.time.Duration.ofSeconds(12);
 
     public DemoBotService(
             DemoBotProperties properties,
@@ -335,10 +337,29 @@ public class DemoBotService implements ApplicationRunner, DisposableBean {
         }
     }
 
+    /**
+     * Triggered immediately when a real mechanic accepts an order so Demo Bot never interferes.
+     */
+    public void onOrderClaimedByRealPartner(UUID orderId) {
+        cancelScheduledTasks(orderId);
+        log.info("demo-bot.cancelled-by-real-partner orderId={}", orderId);
+    }
+
+    /**
+     * Records that a real mechanic is actively online and polling offers/dashboard right now.
+     */
+    public void recordRealPartnerPoll(UUID partnerId, java.time.Instant now) {
+        if (partnerId == null) return;
+        UUID botId = this.botUserId;
+        if (botId != null && botId.equals(partnerId)) return;
+        realPartnerLastPollAt.put(partnerId, now);
+    }
+
     // ------------------------------------------------------------------ Time-based State Machine Steps
 
     /**
-     * Step 2 (+20s default): Bot accepts the order if still REQUESTED and no real mechanic took it.
+     * Step 2 (+20s default): Bot accepts the order if still REQUESTED and no real mechanic took it
+     * or is actively viewing the offer.
      * Sets initial Bot position ~800m–1km away: (lat_khach + 0.006, lng_khach + 0.006).
      */
     private void stepAcceptOrder(UUID orderId) {
@@ -348,24 +369,47 @@ public class DemoBotService implements ApplicationRunner, DisposableBean {
         }
         try {
             UUID botId = ensureBotAccount();
-            Boolean accepted = tx.execute(status -> {
+            String outcome = tx.execute(status -> {
                 var order = orders.lockById(orderId).orElse(null);
                 if (order == null || order.getStatus() != OrderStatus.REQUESTED) {
                     log.info("demo-bot.skip-accept orderId={} currentStatus={}",
                             orderId, order == null ? "NULL" : order.getStatus());
-                    return false;
+                    return "ABORT";
                 }
                 if (dispatchService.currentAssignment(orderId).isPresent()) {
                     log.info("demo-bot.skip-accept orderId={} (real mechanic already assigned)", orderId);
-                    return false;
+                    return "ABORT";
                 }
 
                 var now = clock.instant();
+                // Kiểm tra xem có Thợ thật nào đang mở màn hình xem lời mời (OFFERED chưa hết hạn + vừa poll trong 12s qua) không.
+                // Nếu có, tuyệt đối không cướp đơn trên tay Thợ thật đang thao tác!
+                boolean realMechanicViewingOffer = assignments
+                        .findByOrderIdAndStatus(orderId, OrderAssignment.Status.OFFERED)
+                        .stream()
+                        .filter(a -> !a.getPartnerId().equals(botId) && a.isOpenOffer(now))
+                        .anyMatch(a -> {
+                            var lastPoll = realPartnerLastPollAt.get(a.getPartnerId());
+                            return lastPoll != null && java.time.Duration.between(lastPoll, now).compareTo(REAL_PARTNER_ACTIVE_POLL_WINDOW) <= 0;
+                        });
+                if (realMechanicViewingOffer) {
+                    log.info("demo-bot.defer-accept orderId={} (real mechanic is actively viewing offer)", orderId);
+                    return "DEFER";
+                }
+
+                // Atomic check-and-set: chỉ nhận đơn nếu trạng thái thực sự vẫn là REQUESTED
+                int claimed = orders.compareAndSetStatus(orderId, OrderStatus.REQUESTED, OrderStatus.ASSIGNED);
+                if (claimed == 0) {
+                    log.info("demo-bot.skip-accept orderId={} (claimed concurrently by real mechanic)", orderId);
+                    return "ABORT";
+                }
+
+                var freshOrder = orders.lockById(orderId).orElseThrow();
                 var profile = partners.lockById(botId).orElseThrow();
 
                 // Set initial bot position ~800m - 1km away from customer
-                double botLat = order.getPickupLat() + 0.006;
-                double botLng = order.getPickupLng() + 0.006;
+                double botLat = freshOrder.getPickupLat() + 0.006;
+                double botLng = freshOrder.getPickupLng() + 0.006;
                 profile.updateLocation(botLat, botLng, now);
                 profile.setAvailability(Availability.OFFLINE);
 
@@ -375,24 +419,29 @@ public class DemoBotService implements ApplicationRunner, DisposableBean {
                 // Create and accept assignment for the Demo Bot
                 var assignment = new OrderAssignment(orderId, null, botId, OrderAssignment.Source.BROADCAST, null, now, null);
                 assignment.accept(now);
-                assignments.save(assignment);
+                assignments.saveAndFlush(assignment);
 
                 // Snapshot travel distance & fee just like a real mechanic
-                snapshotTravel(order, profile, now);
+                snapshotTravel(freshOrder, profile, now);
+                orders.saveAndFlush(freshOrder);
 
-                // Transition order REQUESTED -> ASSIGNED
-                stateMachine.transition(order, OrderStatus.ASSIGNED, botId, ActorType.PARTNER, "Accepted by Demo Bot Mechanic");
+                stateMachine.recordExternal(freshOrder.getId(), OrderStatus.REQUESTED, OrderStatus.ASSIGNED,
+                        botId, ActorType.PARTNER, "Accepted by Demo Bot Mechanic");
                 log.info("demo-bot.accepted code={} orderId={} botLat={} botLng={} travelKm={} travelFee={}",
-                        order.getOrderCode(), orderId, botLat, botLng, order.getTravelDistanceKm(), order.getTravelFeeSnapshot());
-                return true;
+                        freshOrder.getOrderCode(), orderId, botLat, botLng, freshOrder.getTravelDistanceKm(), freshOrder.getTravelFeeSnapshot());
+                return "ACCEPTED";
             });
 
-            if (Boolean.TRUE.equals(accepted)) {
+            if ("DEFER".equals(outcome)) {
+                scheduleForOrder(orderId, 10, () -> stepAcceptOrder(orderId));
+            } else if ("ACCEPTED".equals(outcome)) {
                 // Timeline relative to accept (when delay=20s: +8s -> 28s, +15s -> 35s, +18s -> 38s, +22s -> 42s)
                 scheduleForOrder(orderId, 8, () -> stepMoveCloser(orderId));
                 scheduleForOrder(orderId, 15, () -> stepArrive(orderId));
                 scheduleForOrder(orderId, 18, () -> stepStartChecking(orderId));
                 scheduleForOrder(orderId, 22, () -> stepSendQuote(orderId));
+            } else {
+                cancelScheduledTasks(orderId);
             }
         } catch (Exception ex) {
             log.error("demo-bot.step-accept-failed orderId={}", orderId, ex);
