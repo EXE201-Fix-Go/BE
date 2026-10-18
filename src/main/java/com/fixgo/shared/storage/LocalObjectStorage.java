@@ -22,7 +22,8 @@ public class LocalObjectStorage implements ObjectStorage {
     public LocalObjectStorage(UploadController.UploadProperties uploads, StorageProperties storage) {
         this.publicDir = Path.of(uploads.dir()).toAbsolutePath().normalize();
         this.privateDir = Path.of(storage.privateDir()).toAbsolutePath().normalize();
-        this.publicBaseUrl = uploads.publicBaseUrl().replaceAll("/+$", "");
+        String rawBase = uploads.publicBaseUrl() == null ? "http://localhost:8080" : uploads.publicBaseUrl().strip();
+        this.publicBaseUrl = rawBase.replaceAll("/+$", "").replaceAll("(?i)/api/v1$", "");
     }
 
     @Override
