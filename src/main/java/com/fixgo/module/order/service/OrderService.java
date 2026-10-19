@@ -346,6 +346,19 @@ public class OrderService {
         return viewFor(actor, order);
     }
 
+    /**
+     * Báo giá hiện hành của đơn: ưu tiên bản đang chờ khách duyệt (SENT), rồi bản APPROVED mới nhất (đang có hiệu lực).
+     * Bản DECLINED/EXPIRED không được thay thế bản đang hiệu lực; chỉ khi chưa từng có bản nào được duyệt
+     * (VD: báo giá đầu tiên bị từ chối) mới trả bản mới nhất để hiển thị lịch sử.
+     */
+    private java.util.Optional<Quote> effectiveQuote(UUID orderId) {
+        var pending = quotes.findFirstByOrderIdAndStatus(orderId, Quote.Status.SENT);
+        if (pending.isPresent()) return pending;
+        var approved = quotes.findFirstByOrderIdAndStatusOrderByRevisionNoDesc(orderId, Quote.Status.APPROVED);
+        if (approved.isPresent()) return approved;
+        return quotes.findFirstByOrderIdOrderByRevisionNoDesc(orderId);
+    }
+
     @Transactional(readOnly = true)
     public OrderDtos.OrderResponse toResponse(RescueOrder o) {
         var service = catalog.byId(o.getRequestedServiceId()).orElse(null);
@@ -354,7 +367,7 @@ public class OrderService {
                 .map(r -> new OrderDtos.PartnerSummary((UUID) r[0], (String) r[1], (String) r[2], (Double) r[3],
                         (Double) r[4], (java.time.Instant) r[5], (java.time.Instant) r[6]))
                 .orElse(null);
-        var quote = quotes.findFirstByOrderIdOrderByRevisionNoDesc(o.getId()).map(quoteMapper::toResponse).orElse(null);
+        var quote = effectiveQuote(o.getId()).map(quoteMapper::toResponse).orElse(null);
         var payment = payments.latest(o.getId()).map(p -> new OrderDtos.PaymentSummary(p.getId(), p.getAmount(),
                 p.getStatus().name(), p.getMethod().name(), p.getConfirmedAt())).orElse(null);
         var entries = history.findByOrderIdOrderByChangedAtAsc(o.getId()).stream().map(h ->

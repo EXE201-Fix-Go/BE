@@ -56,8 +56,12 @@ public final class PartnerDtos {
                                 Double averageRating, long reviewCount, long activeJobs) { }
 
     /** GET /partner/dashboard — everything the partner home screen polls, in ONE round trip. */
+    /** A cash fee the partner still has to confirm as collected (order already CANCELLED, payment PENDING). */
+    public record PendingCollection(UUID orderId, String orderCode, java.math.BigDecimal amount, String cancellationReason) { }
+
     public record DashboardResponse(ProfileResponse profile, List<com.fixgo.module.dispatch.dto.DispatchDtos.OfferResponse> offers,
-                                    List<com.fixgo.module.dispatch.dto.DispatchDtos.OfferResponse> jobs, StatsResponse stats) { }
+                                    List<com.fixgo.module.dispatch.dto.DispatchDtos.OfferResponse> jobs, StatsResponse stats,
+                                    List<PendingCollection> pendingCollections) { }
 
     public record StaffResponse(UUID userId, String fullName, String phone, VerificationStatus verificationStatus,
                                 Availability availability) { }

@@ -23,13 +23,17 @@ public class PartnerController {
     private final com.fixgo.module.dispatch.service.DispatchService dispatch;
     private final com.fixgo.module.partner.service.ShopInvitationService invitations;
 
+    private final com.fixgo.module.payment.service.PaymentService payments;
+
     public PartnerController(PartnerProfileService service, PartnerStatsService stats,
                              com.fixgo.module.dispatch.service.DispatchService dispatch,
-                             com.fixgo.module.partner.service.ShopInvitationService invitations) {
+                             com.fixgo.module.partner.service.ShopInvitationService invitations,
+                             com.fixgo.module.payment.service.PaymentService payments) {
         this.service = service;
         this.stats = stats;
         this.dispatch = dispatch;
         this.invitations = invitations;
+        this.payments = payments;
     }
 
     @GetMapping("/dashboard")
@@ -37,7 +41,7 @@ public class PartnerController {
     public PartnerDtos.DashboardResponse dashboard(Authentication auth) {
         var actor = Actor.of(auth);
         return new PartnerDtos.DashboardResponse(service.me(actor), dispatch.listOffers(actor),
-                dispatch.listActiveJobs(actor), stats.stats(actor));
+                dispatch.listActiveJobs(actor), stats.stats(actor), payments.listPendingCollections(actor));
     }
 
     @GetMapping("/me")

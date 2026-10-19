@@ -53,4 +53,17 @@ public class PaymentService {
     public Optional<Payment> latest(UUID orderId) {
         return payments.findFirstByOrderIdOrderByCreatedAtDesc(orderId);
     }
+
+    /**
+     * Phí kiểm tra còn PENDING trên các đơn đã hủy (khách từ chối báo giá): thợ vẫn phải xác nhận đã thu
+     * thì đơn mới thôi hiện trên Bảng tin và khoản tiền mới vào thu nhập.
+     */
+    @Transactional(readOnly = true)
+    public java.util.List<com.fixgo.module.partner.dto.PartnerDtos.PendingCollection> listPendingCollections(Actor partner) {
+        return payments.findPendingCollections(partner.userId(), Payment.Status.PENDING,
+                        com.fixgo.module.order.enums.OrderStatus.CANCELLED).stream()
+                .map(r -> new com.fixgo.module.partner.dto.PartnerDtos.PendingCollection(
+                        (UUID) r[0], (String) r[1], (BigDecimal) r[2], (String) r[3]))
+                .toList();
+    }
 }

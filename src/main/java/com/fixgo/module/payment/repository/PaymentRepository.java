@@ -23,4 +23,14 @@ public interface PaymentRepository extends JpaRepository<Payment, UUID> {
     @Query("select coalesce(sum(p.amount), 0) from Payment p where p.collectedByPartnerId = :partnerId "
             + "and p.status = :status and p.confirmedAt >= :since")
     java.math.BigDecimal sumCollectedSince(UUID partnerId, Payment.Status status, java.time.Instant since);
+
+    /**
+     * Khoản thu chờ xác nhận của thợ trên các đơn đã kết thúc (VD: đơn CANCELLED do khách từ chối báo giá, phí kiểm tra
+     * vẫn PENDING). Cột: orderId, orderCode, amount, cancellationReason.
+     */
+    @Query("select p.orderId, o.orderCode, p.amount, o.cancellationReason from Payment p, RescueOrder o "
+            + "where p.collectedByPartnerId = :partnerId and p.status = :status and o.id = p.orderId "
+            + "and o.status = :orderStatus order by p.createdAt desc")
+    java.util.List<Object[]> findPendingCollections(UUID partnerId, Payment.Status status,
+                                                    com.fixgo.module.order.enums.OrderStatus orderStatus);
 }
