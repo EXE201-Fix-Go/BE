@@ -33,10 +33,10 @@ class SupabaseProfileTest {
         runner.run(context -> {
             var env = context.getEnvironment();
             assertThat(env.getProperty("spring.datasource.hikari.connection-init-sql"))
-                    .isEqualTo("SET search_path TO fixgo, extensions, public");
-            assertThat(env.getProperty("spring.jpa.properties.hibernate.default_schema")).isEqualTo("fixgo");
-            assertThat(env.getProperty("spring.flyway.schemas")).isEqualTo("fixgo");
-            assertThat(env.getProperty("spring.flyway.default-schema")).isEqualTo("fixgo");
+                    .isEqualTo("SET search_path TO fixgo_v2, extensions, public");
+            assertThat(env.getProperty("spring.jpa.properties.hibernate.default_schema")).isEqualTo("fixgo_v2");
+            assertThat(env.getProperty("spring.flyway.schemas")).isEqualTo("fixgo_v2");
+            assertThat(env.getProperty("spring.flyway.default-schema")).isEqualTo("fixgo_v2");
             assertThat(env.getProperty("spring.jpa.hibernate.ddl-auto")).isEqualTo("validate");
             assertThat(env.getProperty("spring.flyway.baseline-on-migrate", Boolean.class)).isFalse();
         });
